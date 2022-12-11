@@ -42,49 +42,49 @@ object Sandbox {
 //      new FetcherBuilder(queue).fetch(fetcher)
 //    }
 
-    def when(predicate: String => Boolean): FetcherBranchBuilder = {
+    def when(predicate: URL => Boolean): FetcherBranchBuilder = {
       new FetcherBranchBuilder(queue, predicate)
     }
 
   }
 
   // Fetcher
-  class FetcherBranchBuilder(queue: CrawlingQueue, predicate: String => Boolean) {
-    def fetch[Raw](fetcher: String => Raw): ParserBranchBuilder[Raw] = {
+  class FetcherBranchBuilder(queue: CrawlingQueue, predicate: URL => Boolean) {
+    def fetch[Raw](fetcher: URL => Raw): ParserBranchBuilder[Raw] = {
       new ParserBranchBuilder[Raw](queue, {case url if predicate.apply(url) => fetcher.apply(url)})
     }
   }
-  class SuccessiveFetcherBranchBuilder[Doc](queue: CrawlingQueue, predicate: String => Boolean, partial: PartialFunction[String, Doc]) {
-    def fetch[Raw](fetcher: String => Raw): SuccessiveParserBranchBuilder[Raw, Doc] = {
+  class SuccessiveFetcherBranchBuilder[Doc](queue: CrawlingQueue, predicate: URL => Boolean, partial: PartialFunction[URL, Doc]) {
+    def fetch[Raw](fetcher: URL => Raw): SuccessiveParserBranchBuilder[Raw, Doc] = {
       new SuccessiveParserBranchBuilder[Raw, Doc](queue, {case url if predicate.apply(url) => fetcher.apply(url)}, partial)
     }
   }
-  class FinalFetcherBranchBuilder[Doc](queue: CrawlingQueue, partial: PartialFunction[String, Doc]) {
-    def fetch[Raw](fetcher: String => Raw): FinalParserBranchBuilder[Raw, Doc] = {
+  class FinalFetcherBranchBuilder[Doc](queue: CrawlingQueue, partial: PartialFunction[URL, Doc]) {
+    def fetch[Raw](fetcher: URL => Raw): FinalParserBranchBuilder[Raw, Doc] = {
       new FinalParserBranchBuilder[Raw, Doc](queue, {case url => fetcher.apply(url)}, partial)
     }
   }
 
   //Parser
 
-  class ParserBranchBuilder[Raw](queue: CrawlingQueue, fetcher: PartialFunction[String, Raw]) {
+  class ParserBranchBuilder[Raw](queue: CrawlingQueue, fetcher: PartialFunction[URL, Raw]) {
     def parse[Doc](parser: Raw => Doc): SubsequentBranchBuilder[Doc] = {
       new SubsequentBranchBuilder[Doc](queue, fetcher.andThen(parser))
     }
   }
-  class SuccessiveParserBranchBuilder[Raw, Doc](queue: CrawlingQueue, fetcher: PartialFunction[String, Raw], partial: PartialFunction[String, Doc]) {
+  class SuccessiveParserBranchBuilder[Raw, Doc](queue: CrawlingQueue, fetcher: PartialFunction[URL, Raw], partial: PartialFunction[URL, Doc]) {
     def parse(parser: Raw => Doc): SubsequentBranchBuilder[Doc] = {
       new SubsequentBranchBuilder[Doc](queue, partial.orElse(fetcher.andThen(parser)))
     }
   }
-  class FinalParserBranchBuilder[Raw, Doc](queue: CrawlingQueue, fetcher: PartialFunction[String, Raw], partial: PartialFunction[String, Doc]) {
+  class FinalParserBranchBuilder[Raw, Doc](queue: CrawlingQueue, fetcher: PartialFunction[URL, Raw], partial: PartialFunction[URL, Doc]) {
     def parse(parser: Raw => Doc): FinalBranchBuilder[Doc] = {
       new FinalBranchBuilder[Doc](queue, partial.orElse(fetcher.andThen(parser)))
     }
   }
 
-  class SubsequentBranchBuilder[Doc](queue: CrawlingQueue, partialParser: PartialFunction[String, Doc]) {
-    def when(predicate: String => Boolean): SuccessiveFetcherBranchBuilder[Doc] = {
+  class SubsequentBranchBuilder[Doc](queue: CrawlingQueue, partialParser: PartialFunction[URL, Doc]) {
+    def when(predicate: URL => Boolean): SuccessiveFetcherBranchBuilder[Doc] = {
       new SuccessiveFetcherBranchBuilder(queue, predicate, partialParser)
     }
 
@@ -92,28 +92,28 @@ object Sandbox {
       new FinalFetcherBranchBuilder[Doc](queue, partialParser)
     }
   }
-  class FinalBranchBuilder[Doc](queue: CrawlingQueue, parser: String => Doc) {
+  class FinalBranchBuilder[Doc](queue: CrawlingQueue, parser: URL => Doc) {
     def write(writer: Doc => Unit): PipelineRunner = {
       new PipelineRunner(queue, parser.andThen(writer))
     }
   }
 
-  class PipelineRunner(queue: CrawlingQueue, writer: String => Unit) {
+  class PipelineRunner(queue: CrawlingQueue, writer: URL => Unit) {
     def crawl(): Unit = {
-      queue.foreach(url => writer.apply(url))
+      queue.foreach(url => writer.apply(new URL(url)))
     }
   }
 
-  case class Fetched(url: String, body: String)
-  case class Parsed(url: String, content: String)
+  case class Fetched(url: URL, body: String)
+  case class Parsed(url: URL, content: String)
 
   def main(args: Array[String]): Unit = {
-    val queue = Seq("http://1", "2", "ftp://3", "4")
+    val queue = Seq("http://1", "https://2", "ftp://3", "http://4")
     Crawler.read(queue)
-      .when(url => url.startsWith("https"))
+      .when(url => url.getProtocol == "https")
         .fetch(url => Fetched(url, s"url - https fetcher"))
         .parse(fetched => Parsed(fetched.url, s"parsed - ${fetched.body}"))
-      .when(url => url.startsWith("ftp"))
+      .when(url => url.getProtocol == "ftp")
         .fetch(url => Fetched(url, s"url - ftp fetcher"))
         .parse(fetched => Parsed(fetched.url, s"parsed - ${fetched.body}"))
       .otherwise()
