@@ -71,11 +71,6 @@ object Sandbox {
   class ParserBranchBuilder[Raw](queue: CrawlingQueue, fetcher: PartialFunction[URL, Redirectable[Raw]]) {
     def parse[Doc](parser: Raw => Doc): SubsequentBranchBuilder[Doc] = {
       val f = fetcher.andThen(k => k.map(parser))
-//      val p: PartialFunction[Redirectable[Raw], Redirectable[Doc]] = {
-//        case redirectable => redirectable match {
-//          case Direct(url, data) => Direct(url, parser.apply(data))
-//        }
-//      }
       new SubsequentBranchBuilder[Doc](queue, f)
     }
   }
@@ -116,8 +111,8 @@ object Sandbox {
     def write(writer: Doc => Unit): FailureHandler = {
       val f = parser.andThen{
         k => k match {
-          case Direct(url, data) => data
-          case Redirect(url, target, data) => {
+          case Direct(data) => data
+          case Redirect(target, data) => {
             queue.add(target)
             data
           }
@@ -176,21 +171,27 @@ object Sandbox {
   }
 
   sealed trait Redirectable[A] {
-    def url(): URL
-
     def data(): A
 
     def map[B](f: A => B): Redirectable[B]
+
+    def flatten[B](implicit ev: A <:< Redirectable[B]): Redirectable[B]
   }
-  case class Direct[A](url: URL, data: A) extends Redirectable[A] {
+  case class Direct[A](data: A) extends Redirectable[A] {
     override def map[B](f: A => B): Redirectable[B] = {
-      Direct(url, f.apply(data))
+      Direct(f.apply(data))
+    }
+
+    override def flatten[B](implicit ev: A <:< Redirectable[B]): Redirectable[B] = {
+      ev(this.data)
     }
   }
-  case class Redirect[A](url: URL, target: String, data: A) extends Redirectable[A] {
+  case class Redirect[A](target: String, data: A) extends Redirectable[A] {
     override def map[B](f: A => B): Redirectable[B] = {
-      Redirect(url, target, f.apply(data))
+      Redirect(target, f.apply(data))
     }
+
+    override def flatten[B](implicit ev: A <:< Redirectable[B]): Redirectable[B] = Redirect(target, data.data())
   }
 
   case class Fetched(url: URL, body: String)
@@ -200,16 +201,16 @@ object Sandbox {
     val queue = Seq("http://1", "http://redirect", "2", "ftp://3", "http://4")
     Crawler.read(queue)
       .when(url => url.getProtocol == "https")
-        .fetch(url => Direct(url, Fetched(url, s"url - https fetcher")))
+        .fetch(url => Direct(Fetched(url, s"url - https fetcher")))
         .parse(fetched => Parsed(fetched.url, s"parsed - ${fetched.body}"))
       .when(url => url.getHost == "redirect")
-        .fetch(url => Redirect(url, "http://target", Fetched(url, s"empty")))
+        .fetch(url => Redirect("http://target", Fetched(url, s"empty")))
         .parse(fetched => Parsed(fetched.url, s"parsed - ${fetched.body}"))
       .when(url => url.getProtocol == "ftp")
-        .fetch(url => if (url.toString.endsWith("3")) throw new Exception("Can't fetch") else Direct(url, Fetched(url, s"url - ftp fetcher")))
+        .fetch(url => if (url.toString.endsWith("3")) throw new Exception("Can't fetch") else Direct(Fetched(url, s"url - ftp fetcher")))
         .parse(fetched => Parsed(fetched.url, s"parsed - ${fetched.body}"))
       .otherwise()
-        .fetch(url => Direct(url, Fetched(url, s"url - default fetcher")))
+        .fetch(url => Direct(Fetched(url, s"url - default fetcher")))
         .parse(fetched => Parsed(fetched.url, s"parsed - ${fetched.body}"))
       .followRedirects()
       .write(parsed => println(parsed))
