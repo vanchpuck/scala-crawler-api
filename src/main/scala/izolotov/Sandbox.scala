@@ -69,20 +69,20 @@ object Sandbox {
   //Parser
 
   class ParserBranchBuilder[Raw](queue: CrawlingQueue, fetcher: PartialFunction[URL, Redirectable[Raw]]) {
-    def parse[Doc](parser: Raw => Doc): SubsequentBranchBuilder[Doc] = {
-      val f = fetcher.andThen(k => k.map(parser))
+    def parse[Doc](parser: Raw => Redirectable[Doc]): SubsequentBranchBuilder[Doc] = {
+      val f = fetcher.andThen(k => k.map(parser).flatten)
       new SubsequentBranchBuilder[Doc](queue, f)
     }
   }
   class SuccessiveParserBranchBuilder[Raw, Doc](queue: CrawlingQueue, fetcher: PartialFunction[URL, Redirectable[Raw]], partial: PartialFunction[URL, Redirectable[Doc]]) {
-    def parse(parser: Raw => Doc): SubsequentBranchBuilder[Doc] = {
-      val f = partial.orElse(fetcher.andThen(k => k.map(parser)))
+    def parse(parser: Raw => Redirectable[Doc]): SubsequentBranchBuilder[Doc] = {
+      val f = partial.orElse(fetcher.andThen(k => k.map(parser).flatten))
       new SubsequentBranchBuilder[Doc](queue, f)
     }
   }
   class FinalParserBranchBuilder[Raw, Doc](queue: CrawlingQueue, fetcher: PartialFunction[URL, Redirectable[Raw]], partial: PartialFunction[URL, Redirectable[Doc]]) {
-    def parse(parser: Raw => Doc): FinalBranchBuilder[Doc] = {
-      val f = partial.orElse(fetcher.andThen(k => k.map(parser)))
+    def parse(parser: Raw => Redirectable[Doc]): FinalBranchBuilder[Doc] = {
+      val f = partial.orElse(fetcher.andThen(k => k.map(parser).flatten))
       new FinalBranchBuilder[Doc](queue, partial.orElse(f))
     }
   }
@@ -198,20 +198,23 @@ object Sandbox {
   case class Parsed(url: URL, content: String)
 
   def main(args: Array[String]): Unit = {
-    val queue = Seq("http://1", "http://redirect", "2", "ftp://3", "http://4")
+    val queue = Seq("http://1", "http://redirect", "2", "ftp://3", "http://4", "http://meta-redirect")
     Crawler.read(queue)
       .when(url => url.getProtocol == "https")
         .fetch(url => Direct(Fetched(url, s"url - https fetcher")))
-        .parse(fetched => Parsed(fetched.url, s"parsed - ${fetched.body}"))
+        .parse(fetched => Direct(Parsed(fetched.url, s"parsed - ${fetched.body}")))
       .when(url => url.getHost == "redirect")
         .fetch(url => Redirect("http://target", Fetched(url, s"empty")))
-        .parse(fetched => Parsed(fetched.url, s"parsed - ${fetched.body}"))
+        .parse(fetched => Direct(Parsed(fetched.url, s"parsed - ${fetched.body}")))
+      .when(url => url.getHost == "meta-redirect")
+        .fetch(url => Redirect("http://meta-target", Fetched(url, s"some contect")))
+        .parse(fetched => Direct(Parsed(fetched.url, s"parsed - ${fetched.body}")))
       .when(url => url.getProtocol == "ftp")
         .fetch(url => if (url.toString.endsWith("3")) throw new Exception("Can't fetch") else Direct(Fetched(url, s"url - ftp fetcher")))
-        .parse(fetched => Parsed(fetched.url, s"parsed - ${fetched.body}"))
+        .parse(fetched => Direct(Parsed(fetched.url, s"parsed - ${fetched.body}")))
       .otherwise()
         .fetch(url => Direct(Fetched(url, s"url - default fetcher")))
-        .parse(fetched => Parsed(fetched.url, s"parsed - ${fetched.body}"))
+        .parse(fetched => Direct(Parsed(fetched.url, s"parsed - ${fetched.body}")))
       .followRedirects()
       .write(parsed => println(parsed))
       .ofFailure(exc => println(exc))
