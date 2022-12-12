@@ -51,12 +51,12 @@ object Sandbox {
   // Fetcher
   class FetcherBranchBuilder(queue: CrawlingQueue, predicate: URL => Boolean) {
     def fetch[Raw](fetcher: URL => Raw): ParserBranchBuilder[Raw] = {
-      new ParserBranchBuilder[Raw](queue, {case url if predicate.apply(url) => fetcher.apply(url)})
+      new ParserBranchBuilder[Raw](queue, {case url if predicate.apply(url) => Try(fetcher.apply(url)).recover(e => throw new FetchingException(url.toString, e)).get})
     }
   }
   class SuccessiveFetcherBranchBuilder[Doc](queue: CrawlingQueue, predicate: URL => Boolean, partial: PartialFunction[URL, Doc]) {
     def fetch[Raw](fetcher: URL => Raw): SuccessiveParserBranchBuilder[Raw, Doc] = {
-      new SuccessiveParserBranchBuilder[Raw, Doc](queue, {case url if predicate.apply(url) => fetcher.apply(url)}, partial)
+      new SuccessiveParserBranchBuilder[Raw, Doc](queue, {case url if predicate.apply(url) => Try(fetcher.apply(url)).recover(e => throw new FetchingException(url.toString, e)).get}, partial)
     }
   }
   class FinalFetcherBranchBuilder[Doc](queue: CrawlingQueue, partial: PartialFunction[URL, Doc]) {
@@ -100,7 +100,28 @@ object Sandbox {
 
   class PipelineRunner(queue: CrawlingQueue, writer: URL => Unit) {
     def crawl(): Unit = {
-      queue.foreach(url => writer.apply(new URL(url)))
+      queue.foreach{
+        url =>
+          Try(writer.apply(Try(new URL(url)).recover(e => throw new URLParsingException(url, e)).get))
+            .recover({exc => println(exc)})
+      }
+    }
+  }
+
+  sealed class CrawlingException(url: String) extends Exception
+  class URLParsingException(url: String, cause: Throwable) extends CrawlingException(url) {
+    override def toString: String = {
+      s"${this.getClass.getName} - ${url} - ${cause}"
+    }
+  }
+  class FetchingException(url: String, cause: Throwable) extends CrawlingException(url) {
+    override def toString: String = {
+      s"${this.getClass.getName} - ${url} - ${cause}"
+    }
+  }
+  class ParsingException[Raw](url: String, body: Raw, cause: Throwable) extends CrawlingException(url) {
+    override def toString: String = {
+      s"${this.getClass.getName} - ${url} - ${cause}"
     }
   }
 
@@ -108,13 +129,13 @@ object Sandbox {
   case class Parsed(url: URL, content: String)
 
   def main(args: Array[String]): Unit = {
-    val queue = Seq("http://1", "https://2", "ftp://3", "http://4")
+    val queue = Seq("http://1", "2", "ftp://3", "http://4")
     Crawler.read(queue)
       .when(url => url.getProtocol == "https")
         .fetch(url => Fetched(url, s"url - https fetcher"))
         .parse(fetched => Parsed(fetched.url, s"parsed - ${fetched.body}"))
       .when(url => url.getProtocol == "ftp")
-        .fetch(url => Fetched(url, s"url - ftp fetcher"))
+        .fetch(url => if (url.toString.endsWith("3")) throw new Exception("Can't fetch") else Fetched(url, s"url - ftp fetcher"))
         .parse(fetched => Parsed(fetched.url, s"parsed - ${fetched.body}"))
       .otherwise()
         .fetch(url => Fetched(url, s"url - default fetcher"))
