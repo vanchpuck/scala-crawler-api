@@ -102,12 +102,39 @@ object Sandbox {
     }
   }
   class FinalBranchBuilder[Doc](queue: CrawlingQueue, parser: URL => Redirectable[Doc]) {
-    def write(writer: Doc => Unit): FailureHandler = {
-      // TODO add redirect handling here
-      val f = parser.andThen(k => k.data()).andThen(writer)
-      new FailureHandler(queue, f)
+//    def write(writer: Doc => Unit): FailureHandler = {
+//      // TODO add redirect handling here
+//      val f = parser.andThen(k => k.data()).andThen(writer)
+//      new FailureHandler(queue, f)
+//    }
+    def followRedirects(): RedirectHandler[Doc] = {
+      new RedirectHandler[Doc](queue, parser)
     }
   }
+
+  class RedirectHandler[Doc](queue: CrawlingQueue, parser: URL => Redirectable[Doc]) {
+    def write(writer: Doc => Unit): FailureHandler = {
+      val f = parser.andThen{
+        k => k match {
+          case Direct(url, data) => data
+          case Redirect(url, target, data) => {
+            queue.add(target)
+            data
+          }
+        }
+      }.andThen(writer)
+      new FailureHandler(queue, f)
+    }
+//    val f = parser.andThen(k => k.data()).andThen(writer)
+//    new FailureHandler(queue, f)
+  }
+
+//  class WriterHandler[Doc](queue: CrawlingQueue, parser: URL => Redirectable[Doc]) {
+//    def write(writer: Doc => Unit): FailureHandler = {
+//      val f = parser.andThen(k => k.data()).andThen(writer)
+//      new FailureHandler(queue, f)
+//    }
+//  }
 
   class FailureHandler(queue: CrawlingQueue, writer: URL => Unit) {
     def ofFailure(handler: CrawlingException => Unit): PipelineRunner = {
@@ -153,7 +180,6 @@ object Sandbox {
 
     def data(): A
 
-//    def map[U](f: T => U): Try[U]
     def map[B](f: A => B): Redirectable[B]
   }
   case class Direct[A](url: URL, data: A) extends Redirectable[A] {
@@ -171,12 +197,13 @@ object Sandbox {
   case class Parsed(url: URL, content: String)
 
   def main(args: Array[String]): Unit = {
-    val queue = Seq("http://1", "2", "ftp://3", "http://4")
+    val queue = Seq("http://1", "http://redirect", "2", "ftp://3", "http://4")
     Crawler.read(queue)
       .when(url => url.getProtocol == "https")
-//        .fetch(url => Fetched(url, s"url - https fetcher"))
         .fetch(url => Direct(url, Fetched(url, s"url - https fetcher")))
-//        .fetch(url => Fetched(url, s"url - https fetcher"))
+        .parse(fetched => Parsed(fetched.url, s"parsed - ${fetched.body}"))
+      .when(url => url.getHost == "redirect")
+        .fetch(url => Redirect(url, "http://target", Fetched(url, s"empty")))
         .parse(fetched => Parsed(fetched.url, s"parsed - ${fetched.body}"))
       .when(url => url.getProtocol == "ftp")
         .fetch(url => if (url.toString.endsWith("3")) throw new Exception("Can't fetch") else Direct(url, Fetched(url, s"url - ftp fetcher")))
@@ -184,6 +211,7 @@ object Sandbox {
       .otherwise()
         .fetch(url => Direct(url, Fetched(url, s"url - default fetcher")))
         .parse(fetched => Parsed(fetched.url, s"parsed - ${fetched.body}"))
+      .followRedirects()
       .write(parsed => println(parsed))
       .ofFailure(exc => println(exc))
       .crawl()
