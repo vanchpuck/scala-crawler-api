@@ -93,17 +93,29 @@ object Sandbox {
     }
   }
   class FinalBranchBuilder[Doc](queue: CrawlingQueue, parser: URL => Doc) {
-    def write(writer: Doc => Unit): PipelineRunner = {
-      new PipelineRunner(queue, parser.andThen(writer))
+    def write(writer: Doc => Unit): FailureHandler = {
+      new FailureHandler(queue, parser.andThen(writer))
     }
   }
 
-  class PipelineRunner(queue: CrawlingQueue, writer: URL => Unit) {
+  class FailureHandler(queue: CrawlingQueue, writer: URL => Unit) {
+    def ofFailure(handler: CrawlingException => Unit): PipelineRunner = {
+      val v: PartialFunction[URL, Try[Unit]] = {case url => Try(writer(url))}
+      new PipelineRunner(queue, writer, handler)
+    }
+  }
+
+  class PipelineRunner(queue: CrawlingQueue, writer: URL => Unit, errHandler: CrawlingException => Unit) {
     def crawl(): Unit = {
       queue.foreach{
         url =>
           Try(writer.apply(Try(new URL(url)).recover(e => throw new URLParsingException(url, e)).get))
-            .recover({exc => println(exc)})
+            .recover{
+              exc => exc match {
+                case exc: CrawlingException => errHandler.apply(exc)
+                case _ => throw new RuntimeException("Unknown exception")
+              }
+            }
       }
     }
   }
@@ -141,6 +153,7 @@ object Sandbox {
         .fetch(url => Fetched(url, s"url - default fetcher"))
         .parse(fetched => Parsed(fetched.url, s"parsed - ${fetched.body}"))
       .write(parsed => println(parsed))
+      .ofFailure(exc => println(exc))
       .crawl()
   }
 
