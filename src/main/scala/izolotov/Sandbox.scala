@@ -3,11 +3,28 @@ package izolotov
 import java.net.URL
 
 import scala.collection.mutable
-import scala.util.Try
+import scala.util.{Failure, Success, Try}
 
 object Sandbox {
 
-  case class QueueItem(url: String, depth: Int)
+  case class InputItem(id:String) {
+    def onPickUp(): InputItem = {
+      println(s"${id.toString} picked up")
+      this
+    }
+
+    def onSuccess(): InputItem = {
+      println(s"${id.toString} success")
+      this
+    }
+
+    def onFailure(): InputItem = {
+      println(s"${id.toString} failure")
+      this
+    }
+  }
+
+  case class QueueItem(inputItem: InputItem, url: URL, depth: Int)
 
   class CrawlingQueue(data: Iterable[String]) extends Iterator[String]{
     val queue: mutable.Queue[String] = mutable.Queue()
@@ -51,43 +68,43 @@ object Sandbox {
   // Fetcher
   class FetcherBranchBuilder(queue: CrawlingQueue, predicate: URL => Boolean) {
     def fetch[Raw](fetcher: URL => Redirectable[Raw]): ParserBranchBuilder[Raw] = {
-      new ParserBranchBuilder[Raw](queue, {case url if predicate.apply(url) => Try(fetcher.apply(url)).recover(e => throw new FetchingException(url.toString, e)).get})
+      new ParserBranchBuilder[Raw](queue, {case qItem if predicate.apply(qItem.url) => Try(fetcher.apply(qItem.url)).recover(e => throw new FetchingException(qItem.url.toString, e)).get})
     }
   }
-  class SuccessiveFetcherBranchBuilder[Doc](queue: CrawlingQueue, predicate: URL => Boolean, partial: PartialFunction[URL, Redirectable[Doc]]) {
+  class SuccessiveFetcherBranchBuilder[Doc](queue: CrawlingQueue, predicate: URL => Boolean, partial: PartialFunction[QueueItem, Redirectable[Doc]]) {
     def fetch[Raw](fetcher: URL => Redirectable[Raw]): SuccessiveParserBranchBuilder[Raw, Doc] = {
-      new SuccessiveParserBranchBuilder[Raw, Doc](queue, {case url if predicate.apply(url) => Try(fetcher.apply(url)).recover(e => throw new FetchingException(url.toString, e)).get}, partial)
+      new SuccessiveParserBranchBuilder[Raw, Doc](queue, {case qItem if predicate.apply(qItem.url) => Try(fetcher.apply(qItem.url)).recover(e => throw new FetchingException(qItem.url.toString, e)).get}, partial)
     }
   }
-  class FinalFetcherBranchBuilder[Doc](queue: CrawlingQueue, partial: PartialFunction[URL, Redirectable[Doc]]) {
+  class FinalFetcherBranchBuilder[Doc](queue: CrawlingQueue, partial: PartialFunction[QueueItem, Redirectable[Doc]]) {
     def fetch[Raw](fetcher: URL => Redirectable[Raw]): FinalParserBranchBuilder[Raw, Doc] = {
-//      val f = fetcher.andThen(k => k.map(parser))
-      new FinalParserBranchBuilder[Raw, Doc](queue, {case url => fetcher.apply(url)}, partial)
+      new FinalParserBranchBuilder[Raw, Doc](queue, {case qItem => fetcher.apply(qItem.url)}, partial)
     }
   }
 
   //Parser
 
-  class ParserBranchBuilder[Raw](queue: CrawlingQueue, fetcher: PartialFunction[URL, Redirectable[Raw]]) {
+  class ParserBranchBuilder[Raw](queue: CrawlingQueue, fetcher: PartialFunction[QueueItem, Redirectable[Raw]]) {
     def parse[Doc](parser: Raw => Redirectable[Doc]): SubsequentBranchBuilder[Doc] = {
+//      val ff: PartialFunction[QueueItem, Redirectable[Doc]] = {case qItem => parser.apply(fetcher.ap)}
       val f = fetcher.andThen(k => k.map(parser).flatten)
       new SubsequentBranchBuilder[Doc](queue, f)
     }
   }
-  class SuccessiveParserBranchBuilder[Raw, Doc](queue: CrawlingQueue, fetcher: PartialFunction[URL, Redirectable[Raw]], partial: PartialFunction[URL, Redirectable[Doc]]) {
+  class SuccessiveParserBranchBuilder[Raw, Doc](queue: CrawlingQueue, fetcher: PartialFunction[QueueItem, Redirectable[Raw]], partial: PartialFunction[QueueItem, Redirectable[Doc]]) {
     def parse(parser: Raw => Redirectable[Doc]): SubsequentBranchBuilder[Doc] = {
       val f = partial.orElse(fetcher.andThen(k => k.map(parser).flatten))
       new SubsequentBranchBuilder[Doc](queue, f)
     }
   }
-  class FinalParserBranchBuilder[Raw, Doc](queue: CrawlingQueue, fetcher: PartialFunction[URL, Redirectable[Raw]], partial: PartialFunction[URL, Redirectable[Doc]]) {
+  class FinalParserBranchBuilder[Raw, Doc](queue: CrawlingQueue, fetcher: PartialFunction[QueueItem, Redirectable[Raw]], partial: PartialFunction[QueueItem, Redirectable[Doc]]) {
     def parse(parser: Raw => Redirectable[Doc]): FinalBranchBuilder[Doc] = {
       val f = partial.orElse(fetcher.andThen(k => k.map(parser).flatten))
       new FinalBranchBuilder[Doc](queue, partial.orElse(f))
     }
   }
 
-  class SubsequentBranchBuilder[Doc](queue: CrawlingQueue, partialParser: PartialFunction[URL, Redirectable[Doc]]) {
+  class SubsequentBranchBuilder[Doc](queue: CrawlingQueue, partialParser: PartialFunction[QueueItem, Redirectable[Doc]]) {
     def when(predicate: URL => Boolean): SuccessiveFetcherBranchBuilder[Doc] = {
       new SuccessiveFetcherBranchBuilder(queue, predicate, partialParser)
     }
@@ -96,18 +113,13 @@ object Sandbox {
       new FinalFetcherBranchBuilder[Doc](queue, partialParser)
     }
   }
-  class FinalBranchBuilder[Doc](queue: CrawlingQueue, parser: URL => Redirectable[Doc]) {
-//    def write(writer: Doc => Unit): FailureHandler = {
-//      // TODO add redirect handling here
-//      val f = parser.andThen(k => k.data()).andThen(writer)
-//      new FailureHandler(queue, f)
-//    }
+  class FinalBranchBuilder[Doc](queue: CrawlingQueue, parser: QueueItem => Redirectable[Doc]) {
     def followRedirects(): RedirectHandler[Doc] = {
       new RedirectHandler[Doc](queue, parser)
     }
   }
 
-  class RedirectHandler[Doc](queue: CrawlingQueue, parser: URL => Redirectable[Doc]) {
+  class RedirectHandler[Doc](queue: CrawlingQueue, parser: QueueItem => Redirectable[Doc]) {
     def write(writer: Doc => Unit): FailureHandler = {
       val f = parser.andThen{
         k => k match {
@@ -120,8 +132,6 @@ object Sandbox {
       }.andThen(writer)
       new FailureHandler(queue, f)
     }
-//    val f = parser.andThen(k => k.data()).andThen(writer)
-//    new FailureHandler(queue, f)
   }
 
 //  class WriterHandler[Doc](queue: CrawlingQueue, parser: URL => Redirectable[Doc]) {
@@ -131,29 +141,42 @@ object Sandbox {
 //    }
 //  }
 
-  class FailureHandler(queue: CrawlingQueue, writer: URL => Unit) {
+  class FailureHandler(queue: CrawlingQueue, writer: QueueItem => Unit) {
     def ofFailure(handler: CrawlingException => Unit): PipelineRunner = {
-      val v: PartialFunction[URL, Try[Unit]] = {case url => Try(writer(url))}
+//      val v: PartialFunction[URL, Try[Unit]] = {case url => Try(writer(url))}
       new PipelineRunner(queue, writer, handler)
     }
   }
 
-  class PipelineRunner(queue: CrawlingQueue, writer: URL => Unit, errHandler: CrawlingException => Unit) {
+  class PipelineRunner(queue: CrawlingQueue, writer: QueueItem => Unit, errHandler: CrawlingException => Unit) {
     def crawl(): Unit = {
       queue.foreach{
         url =>
-          Try(writer.apply(Try(new URL(url)).recover(e => throw new URLParsingException(url, e)).get))
-            .recover{
-              exc => exc match {
-                case exc: CrawlingException => errHandler.apply(exc)
+          val inItem = InputItem(url)
+          inItem.onPickUp()
+          Try{
+            val qItem = Try(QueueItem(inItem, new URL(url), 0)).recover(e => throw new URLParsingException(url, e)).get
+            writer.apply(qItem)
+          } match {
+            case Success(_) => inItem.onSuccess()
+            case Failure(exc) => {
+              exc match {
+                case exc: CrawlingException => {
+                  inItem.onFailure()
+                  errHandler.apply(exc)
+                }
                 case _ => throw new RuntimeException("Unknown exception")
               }
             }
+          }
       }
     }
   }
 
-  sealed class CrawlingException(url: String) extends Exception
+
+  sealed class CrawlingException(url: String) extends Exception {
+    def url(): String = url
+  }
   class URLParsingException(url: String, cause: Throwable) extends CrawlingException(url) {
     override def toString: String = {
       s"${this.getClass.getName} - ${url} - ${cause}"
