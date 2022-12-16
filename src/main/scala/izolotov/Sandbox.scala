@@ -3,6 +3,7 @@ package izolotov
 import java.net.URL
 import java.util.concurrent.Executors
 
+import com.google.common.util.concurrent.ThreadFactoryBuilder
 import izolotov.Sandbox.CrawlingException
 
 import scala.collection.mutable
@@ -53,20 +54,24 @@ object Sandbox {
 
   case class HostQueue(ec: ExecutionContext, moderator: FixedDelayModerator)
 
-  class Manager(delay: Long) {
+  class Manager(delay: Long, parallelism: Int) {
 
     val map = collection.mutable.Map[String, HostQueue]()
+
+    val threadFactory = new ThreadFactoryBuilder().setDaemon(false).build
+    val sharedEC = ExecutionContext.fromExecutor(Executors.newFixedThreadPool(parallelism, threadFactory))
+    val onCompleteEC = ExecutionContext.fromExecutor(Executors.newFixedThreadPool(1, threadFactory))
 
     def manage(item: QueueItem, fn: QueueItem => Unit, success: () => Unit, err: Throwable => Unit): Unit = {
       val queue = map.getOrElseUpdate(item.url.getHost, HostQueue(ec(), new FixedDelayModerator(delay)))
       Future {
         val f = Future {
           queue.moderator.apply(item, fn)// extractor.apply(url.toString)
-        }(ec)
+        }(sharedEC)
         f.onComplete {
           case Failure(e) => err.apply(e)
           case Success(_) => success.apply()
-        }(ec)
+        }(onCompleteEC)
         Await.result(f, Duration.Inf)
       }(queue.ec)
     }
@@ -75,7 +80,7 @@ object Sandbox {
       fn.apply(e)
     }
 
-    private def ec(): ExecutionContext = ExecutionContext.fromExecutor(Executors.newFixedThreadPool(1))
+    private def ec(): ExecutionContext = ExecutionContext.fromExecutor(Executors.newFixedThreadPool(1, threadFactory))
   }
 
   object Crawler {
@@ -180,7 +185,7 @@ object Sandbox {
   }
 
   class PipelineRunner(queue: CrawlingQueue, writer: QueueItem => Unit, errHandler: CrawlingException => Unit) {
-    val manager = new Manager(2000L)
+    val manager = new Manager(2000L, 1)
     def crawl(): Unit = {
       queue.foreach{
         url =>
