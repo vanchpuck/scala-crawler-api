@@ -1,8 +1,13 @@
 package izolotov
 
 import java.net.URL
+import java.util.concurrent.Executors
+
+import izolotov.Sandbox.CrawlingException
 
 import scala.collection.mutable
+import scala.concurrent.duration.Duration
+import scala.concurrent.{Await, ExecutionContext, Future}
 import scala.util.{Failure, Success, Try}
 
 object Sandbox {
@@ -18,7 +23,7 @@ object Sandbox {
       this
     }
 
-    def onFailure(): InputItem = {
+    def onFailure(throwable: Throwable): InputItem = {
       println(s"${id.toString} failure")
       this
     }
@@ -44,6 +49,33 @@ object Sandbox {
       //      println("next")
       queue.dequeue()
     }
+  }
+
+  case class HostQueue(ec: ExecutionContext, moderator: FixedDelayModerator)
+
+  class Manager(delay: Long) {
+
+    val map = collection.mutable.Map[String, HostQueue]()
+
+    def manage(item: QueueItem, fn: QueueItem => Unit, success: () => Unit, err: Throwable => Unit): Unit = {
+      val queue = map.getOrElseUpdate(item.url.getHost, HostQueue(ec(), new FixedDelayModerator(delay)))
+      Future {
+        val f = Future {
+          queue.moderator.apply(item, fn)// extractor.apply(url.toString)
+        }(ec)
+        f.onComplete {
+          case Failure(e) => err.apply(e)
+          case Success(_) => success.apply()
+        }(ec)
+        Await.result(f, Duration.Inf)
+      }(queue.ec)
+    }
+
+    def ofFailure[A](e: Throwable, fn: Throwable => A): Unit = {
+      fn.apply(e)
+    }
+
+    private def ec(): ExecutionContext = ExecutionContext.fromExecutor(Executors.newFixedThreadPool(1))
   }
 
   object Crawler {
@@ -143,30 +175,24 @@ object Sandbox {
 
   class FailureHandler(queue: CrawlingQueue, writer: QueueItem => Unit) {
     def ofFailure(handler: CrawlingException => Unit): PipelineRunner = {
-//      val v: PartialFunction[URL, Try[Unit]] = {case url => Try(writer(url))}
       new PipelineRunner(queue, writer, handler)
     }
   }
 
   class PipelineRunner(queue: CrawlingQueue, writer: QueueItem => Unit, errHandler: CrawlingException => Unit) {
+    val manager = new Manager(2000L)
     def crawl(): Unit = {
       queue.foreach{
         url =>
           val inItem = InputItem(url)
           inItem.onPickUp()
-          Try{
+          try {
             val qItem = Try(QueueItem(inItem, new URL(url), 0)).recover(e => throw new URLParsingException(url, e)).get
-            writer.apply(qItem)
-          } match {
-            case Success(_) => inItem.onSuccess()
-            case Failure(exc) => {
-              exc match {
-                case exc: CrawlingException => {
-                  inItem.onFailure()
-                  errHandler.apply(exc)
-                }
-                case _ => throw new RuntimeException("Unknown exception")
-              }
+            manager.manage(qItem, writer, inItem.onSuccess, inItem.onFailure)
+          } catch {
+            case exc: CrawlingException => {
+              inItem.onFailure(exc)
+              errHandler.apply(exc)
             }
           }
       }
@@ -221,7 +247,8 @@ object Sandbox {
   case class Parsed(url: URL, content: String)
 
   def main(args: Array[String]): Unit = {
-    val queue = Seq("http://1", "http://redirect", "2", "ftp://3", "http://4", "http://meta-redirect")
+//    val queue = Seq("http://1", "http://redirect", "2", "ftp://3", "http://4", "http://meta-redirect")
+    val queue = Seq("ftp://host3/3", "http://host1/1", "http://host1/2", "http://host1/3", "http://host2/1", "http://host2/2", "http://host1/4", "http://host1/5")
     Crawler.read(queue)
       .when(url => url.getProtocol == "https")
         .fetch(url => Direct(Fetched(url, s"url - https fetcher")))
