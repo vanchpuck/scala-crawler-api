@@ -7,6 +7,7 @@ import java.util.concurrent.Executors
 
 import com.google.common.util.concurrent.ThreadFactoryBuilder
 import izolotov.FixedDelayModerator
+import izolotov.crawler.CrawlerApi.{CrawlerOption, ManagerBuilder}
 import izolotov.crawler.CrawlerInput.QueueItem
 //import izolotov.Sandbox.{Fetched, HostQueue, QueueItem, SeleniumResp}
 import izolotov.crawler.CrawlerApi.{Direct, Redirect, RedirectAnalyzer, Redirectable}
@@ -64,6 +65,17 @@ object DefaultCrawler {
     }
   }
 
+  class HostQueueManagerBuilder() extends ManagerBuilder{
+    private var _delay: Long = 0
+    def delay: Long = _delay
+    def delay_= (delay: Long): Unit = _delay = delay
+    override def build(): CrawlingManager = {
+      new HostQueueManager(delay, 10)
+    }
+  }
+//  implicit val managerBuilder = new HostQueueManagerBuilder()
+
+
   class HostQueueManager(delay: Long, parallelism: Int) extends CrawlingManager {
 
     case class HostQueue(ec: ExecutionContext, moderator: FixedDelayModerator)
@@ -113,12 +125,42 @@ object DefaultCrawler {
 //    def delay(ms: Long)
 //  }
 //
-//  implicit class CrawlerExt(b: CrawlerApi.CrawlerBuilder) {
-//    def withSettings
+//  class CrawlerExt(b: CrawlerApi.CrawlerBuilder) {
+//    def delay(ms: Long): CrawlerApi.CrawlerBuilder = {
+//      new CrawlerApi.CrawlerBuilder(b)
+//    }
 //  }
+//  implicit def stringToString(s: CrawlerApi.CrawlerBuilder) = new CrawlerExt(s)
 //  class CrawlerExt(val s: CrawlerApi.Crawler) {
 //    def increment = s.map(c => (c + 1).toChar)
 //  }
+  class DefaultManagerBuilder extends ManagerBuilder {
+    private var delay: Long = 0
+    private var parallelism: Int = 10
+    def delay(ms: Long): ManagerBuilder = {
+      delay = ms
+      this
+    }
+    def parallelism(threadNum: Int): ManagerBuilder = {
+      parallelism = threadNum
+      this
+    }
+    override def build(): CrawlingManager = {
+      new HostQueueManager(delay, parallelism)
+    }
+  }
+  implicit val managerBuilder = new DefaultManagerBuilder()
+
+  object Delay extends CrawlerOption[DefaultManagerBuilder, Long] {
+    override def apply(managerBuilder: DefaultManagerBuilder, value: Long): ManagerBuilder = {
+      managerBuilder.delay(value)
+    }
+  }
+  object Parallelism extends CrawlerOption[DefaultManagerBuilder, Int] {
+    override def apply(managerBuilder: DefaultManagerBuilder, value: Int): ManagerBuilder = {
+      managerBuilder.parallelism(value)
+    }
+  }
 
 
 }

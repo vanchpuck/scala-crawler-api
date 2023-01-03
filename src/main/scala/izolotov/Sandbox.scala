@@ -1,15 +1,22 @@
 package izolotov
 
-import java.net.URL
+import java.net.{HttpURLConnection, URL}
 import java.util.concurrent.Executors
 
 import com.google.common.util.concurrent.ThreadFactoryBuilder
 import izolotov.Sandbox.CrawlingException
+import org.jsoup.nodes.{Document, Element}
 
 import scala.collection.mutable
 import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, ExecutionContext, Future}
 import scala.util.{Failure, Success, Try}
+import HttpURLConnection.{HTTP_MOVED_PERM, HTTP_MOVED_TEMP}
+import java.net.http.{HttpClient, HttpResponse}
+import java.nio.charset.StandardCharsets
+
+import org.jsoup.Jsoup
+import org.jsoup.select.NodeFilter
 
 object Sandbox {
 
@@ -19,28 +26,58 @@ object Sandbox {
   trait Jsonable[T]{
     def serialize(t: T): Redirectable[T]
   }
-  trait CaseJsonable[T <: Product] extends Jsonable[T]{
-    def serialize(t: T): Redirectable[T]
-  }
   object Jsonable{
-//    implicit object StringJsonable extends Jsonable[HttpResponse[_]]{
-//      def serialize(t: HttpResponse[_]): Redirectable[HttpResponse[_]] = if (t.statusCode == 302) Redirect("redirect", t) else Direct(t)
-//    }
+
+    implicit val httpClient = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER).build()
+
+    implicit object JsoupDocBodyHandler extends HttpResponse.BodyHandler[Document] {
+      override def apply(responseInfo: HttpResponse.ResponseInfo): HttpResponse.BodySubscriber[Document] = {
+        val upstream = HttpResponse.BodySubscribers.ofString(StandardCharsets.UTF_8)
+        HttpResponse.BodySubscribers.mapping(
+          upstream,
+          (html: String) => {
+            Jsoup.parse(html)
+          }
+        )
+      }
+    }
+
     implicit object FetchedJsonable extends Jsonable[Fetched[String]]{
       def serialize(t: Fetched[String]): Redirectable[Fetched[String]] = if (t.url == null) Redirect("redirect", t) else Direct(t)
     }
     implicit object SeleniumFetchedJsonable extends Jsonable[Fetched[SeleniumResp]]{
       def serialize(t: Fetched[SeleniumResp]): Redirectable[Fetched[SeleniumResp]] = if (t.url == null) Redirect("redirect", t) else Direct(t)
     }
-//    implicit object ParsedStringJsonable extends Jsonable[Parsed[String]]{
-//      def serialize(t: Parsed[String]): Redirectable[Parsed[String]] = if (t.url == null) Redirect("redirect", t) else Direct(t)
-//    }
-    implicit object ParsedProductJsonable extends CaseJsonable[Parsed]{
-      def serialize(t: Parsed): Redirectable[Parsed] = Direct(t)
+    implicit object JsoupDocFetchedJsonable extends Jsonable[HttpResponse[Document]]{
+
+      import scala.jdk.CollectionConverters._
+      val Pattern = ".*url=(.+)\\s*".r
+
+      def serialize(resp: HttpResponse[Document]): Redirectable[HttpResponse[Document]] = {
+        val f: PartialFunction[Element, String] = {
+          case el if el.attributes().asScala.exists(a => a.getKey == "http-equiv" && a.getValue == "refresh") =>
+            el.attributes().get("content")
+        }
+        // TODO other http codes
+        // TODO missing Location header
+        // TODO check headrs cas sensitivity
+        resp.statusCode match {
+          case 302 => Redirect(resp.headers().firstValue("location").get(), resp)
+          case _ => {
+            resp.body()
+              .getElementsByTag("meta")
+              .iterator().asScala
+              .collectFirst(f)
+              .map{
+                content =>
+                  val Pattern(url) = content
+                  Redirect(url, resp)
+              }
+              .getOrElse(Direct(resp))
+          }
+        }
+      }
     }
-//    implicit object ProductJsonable extends CaseJsonable[Prod]{
-//      def serialize(t: Parsed): Redirectable[Parsed] = Direct(t)
-//    }
   }
 
 
@@ -153,22 +190,20 @@ object Sandbox {
   //Parser
 
   class ParserBranchBuilder[Raw](queue: CrawlingQueue, fetcher: PartialFunction[QueueItem, Redirectable[Raw]]) {
-    def parse[Doc](parser: Raw => Redirectable[Doc]): SubsequentBranchBuilder[Doc] = {
-//      val ff: PartialFunction[QueueItem, Redirectable[Doc]] = {case qItem => parser.apply(fetcher.ap)}
-//      val f = fetcher.andThen(k => k.map(parser.andThen(a => c.serialize(a))).flatten)
-      val f = fetcher.andThen(k => k.map(parser).flatten)
+    def parse[Doc](parser: Raw => Doc): SubsequentBranchBuilder[Doc] = {
+      val f = fetcher.andThen(k => k.map(parser))
       new SubsequentBranchBuilder[Doc](queue, f)
     }
   }
   class SuccessiveParserBranchBuilder[Raw, Doc](queue: CrawlingQueue, fetcher: PartialFunction[QueueItem, Redirectable[Raw]], partial: PartialFunction[QueueItem, Redirectable[Doc]]) {
-    def parse(parser: Raw => Redirectable[Doc]): SubsequentBranchBuilder[Doc] = {
-      val f = partial.orElse(fetcher.andThen(k => k.map(parser).flatten))
+    def parse(parser: Raw => Doc): SubsequentBranchBuilder[Doc] = {
+      val f = partial.orElse(fetcher.andThen(k => k.map(parser)))
       new SubsequentBranchBuilder[Doc](queue, f)
     }
   }
   class FinalParserBranchBuilder[Raw, Doc](queue: CrawlingQueue, fetcher: PartialFunction[QueueItem, Redirectable[Raw]], partial: PartialFunction[QueueItem, Redirectable[Doc]]) {
-    def parse(parser: Raw => Redirectable[Doc]): FinalBranchBuilder[Doc] = {
-      val f = partial.orElse(fetcher.andThen(k => k.map(parser).flatten))
+    def parse(parser: Raw => Doc): FinalBranchBuilder[Doc] = {
+      val f = partial.orElse(fetcher.andThen(k => k.map(parser)))
       new FinalBranchBuilder[Doc](queue, partial.orElse(f))
     }
   }
@@ -260,24 +295,16 @@ object Sandbox {
     def data(): A
 
     def map[B](f: A => B): Redirectable[B]
-
-    def flatten[B](implicit ev: A <:< Redirectable[B]): Redirectable[B]
   }
   case class Direct[A](data: A) extends Redirectable[A] {
     override def map[B](f: A => B): Redirectable[B] = {
       Direct(f.apply(data))
-    }
-
-    override def flatten[B](implicit ev: A <:< Redirectable[B]): Redirectable[B] = {
-      ev(this.data)
     }
   }
   case class Redirect[A](target: String, data: A) extends Redirectable[A] {
     override def map[B](f: A => B): Redirectable[B] = {
       Redirect(target, f.apply(data))
     }
-
-    override def flatten[B](implicit ev: A <:< Redirectable[B]): Redirectable[B] = Redirect(target, data.data())
   }
 
   case class SeleniumResp(body: String)
@@ -287,34 +314,29 @@ object Sandbox {
   case class Parsed(url: URL, content: Product)
   case class ParsedProduct[A <: Product](url: URL, content: A)
 
-//  def of[A <: Product](a: A): Parsed[Product] = a
-
   def main(args: Array[String]): Unit = {
     import Jsonable._
-    implicit val c: CaseJsonable[Parsed]  = Jsonable.ParsedProductJsonable
-    val vv: Product = ParsedContent("sdf")
-//    val vvv: Parsed[Product] = Parsed(new URL("sdf"), ParsedContent("sdf"))
-//    Jsonable.ParsedProductJsonable.serialize(vvv)
-//    implicit val a: Jsonable[Fetched[String]]  = Jsonable.FetchedJsonable
-//    implicit val b: Jsonable[Fetched[SeleniumResp]]  = Jsonable.SeleniumFetchedJsonable
+//    val d = BaseHttpFetcher().
+
 //    val queue = Seq("http://1", "http://redirect", "2", "ftp://3", "http://4", "http://meta-redirect")
-    val queue = Seq("ftp://host3/3", "http://host1/1", "http://host1/2", "http://host1/3", "http://host2/1", "http://host2/2", "http://host1/4", "http://host1/5")
+    val queue = Seq("http://example.com/1", "ftp://host3/3", "http://host1/1", "http://host1/2", "http://host1/3", "http://host2/1", "http://host2/2", "http://host1/4", "http://host1/5")
+    val fetcher = BaseHttpFetcher()
     Crawler.read(queue)
-      .when(url => url.getProtocol == "https")
-        .fetch(url => Fetched[String](url, s"url - https fetcher"))
-        .parse(fetched => Direct(Parsed(fetched.url, ParsedContent(s"parsed - ${fetched.body}"))))
+      .when(url => url.getHost == "example.com")
+        .fetch(fetcher.fetch)
+        .parse(fetched => Parsed(fetched.uri().toURL, ParsedContent(s"parsed - ${fetched.body}")))
       .when(url => url.getHost == "redirect")
         .fetch(url => Fetched(url, s"empty"))
-        .parse(fetched => Direct(Parsed(fetched.url, ParsedContent(s"parsed - ${fetched.body.toString}"))))
+        .parse(fetched => Parsed(fetched.url, ParsedContent(s"parsed - ${fetched.body.toString}")))
       .when(url => url.getHost == "meta-redirect")
         .fetch(url => Fetched(url, s"some contect"))
-        .parse(fetched => Direct(Parsed(fetched.url, ParsedContent(s"parsed - ${fetched.body}"))))
+        .parse(fetched => Parsed(fetched.url, ParsedContent(s"parsed - ${fetched.body}")))
       .when(url => url.getProtocol == "ftp")
         .fetch(url => if (url.toString.endsWith("3")) throw new Exception("Can't fetch") else Fetched(url, s"url - ftp fetcher"))
-        .parse(fetched => Direct(Parsed(fetched.url, ParsedContent(s"parsed - ${fetched.body}"))))
+        .parse(fetched => Parsed(fetched.url, ParsedContent(s"parsed - ${fetched.body}")))
       .otherwise()
         .fetch(url => Fetched[SeleniumResp](url, SeleniumResp(s"url - default fetcher")))
-        .parse(fetched => Direct(Parsed(fetched.url, ParsedContent(s"parsed - ${fetched.body}"))))
+        .parse(fetched => Parsed(fetched.url, ParsedContent(s"parsed - ${fetched.body}")))
       .followRedirects()
       .write(parsed => println(parsed))
       .ofFailure(exc => println(exc))
