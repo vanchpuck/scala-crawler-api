@@ -66,15 +66,67 @@ object DefaultCrawler {
   }
 
   class HostQueueManagerBuilder() extends ManagerBuilder{
-    private var _delay: Long = 0
-    def delay: Long = _delay
-    def delay_= (delay: Long): Unit = _delay = delay
+    var dd = new DefaultManagerBuilder()
+    dd.delay(15000L)
+    var v: PartialFunction[URL, DefaultManagerBuilder] = {case _ if false => dd}
+//    private var _delay: URL => Long
+//    def delay: Long = _delay
+//    def delay: URL => Long
+
+    var currentBrunch: DefaultManagerBuilder = null
+
+    def setDelay(value: Long): Unit = {
+      currentBrunch.delay(value)
+//      val f: PartialFunction[URL, Long] = {case url if predicate.apply(url) => value}
+//      v.orElse(f)
+    }
+
+    def branch(predicate: URL => Boolean): Unit = {
+      currentBrunch = new DefaultManagerBuilder()
+      val pf: PartialFunction[URL, DefaultManagerBuilder] = {case url if predicate.apply(url) => currentBrunch}
+      v = v.orElse(pf)
+    }
+
+//    def delay_= (delay: Long): Unit = _delay = delay
     override def build(): CrawlingManager = {
-      new HostQueueManager(delay, 10)
+      val default = new DefaultManagerBuilder()
+      v = v.orElse({case _ if false => default})
+      val q: Function[URL, Long] = v.andThen(g => g.getDelay())
+      new FlexibleHostQueueManager(q, 10)
     }
   }
 //  implicit val managerBuilder = new HostQueueManagerBuilder()
 
+  class FlexibleHostQueueManager(delay: URL => Long, parallelism: Int) extends CrawlingManager {
+    case class HostQueue(ec: ExecutionContext, moderator: FixedDelayModerator)
+
+    val map = collection.mutable.Map[String, HostQueue]()
+
+    val threadFactory = new ThreadFactoryBuilder().setDaemon(false).build
+    val sharedEC = ExecutionContext.fromExecutor(Executors.newFixedThreadPool(parallelism, threadFactory))
+    val onCompleteEC = ExecutionContext.fromExecutor(Executors.newFixedThreadPool(1, threadFactory))
+
+    def manage(item: QueueItem, fn: QueueItem => Unit, success: () => Unit, err: Throwable => Unit): Unit = {
+//      val pFn: PartialFunction[URL, Long] = {case u => 1L}
+      val queue = map.getOrElseUpdate(item.url.getHost, HostQueue(ec(), new FixedDelayModerator(delay.apply(item.url))))
+      Future {
+        val f = Future {
+          queue.moderator.apply(item, fn)// extractor.apply(url.toString)
+        }(sharedEC)
+        f.onComplete {
+          case Failure(e) => err.apply(e)
+          case Success(_) => success.apply()
+        }(onCompleteEC)
+        Await.result(f, Duration.Inf)
+      }(queue.ec)
+    }
+
+    def ofFailure[A](e: Throwable, fn: Throwable => A): Unit = {
+      fn.apply(e)
+    }
+
+    private def ec(): ExecutionContext = ExecutionContext.fromExecutor(Executors.newFixedThreadPool(1, threadFactory))
+  }
 
   class HostQueueManager(delay: Long, parallelism: Int) extends CrawlingManager {
 
@@ -134,33 +186,65 @@ object DefaultCrawler {
 //  class CrawlerExt(val s: CrawlerApi.Crawler) {
 //    def increment = s.map(c => (c + 1).toChar)
 //  }
-  class DefaultManagerBuilder extends ManagerBuilder {
-    private var delay: Long = 0
+  class DefaultManagerBuilder() extends ManagerBuilder {
+    private var delay: Long = 0L
     private var parallelism: Int = 10
-    def delay(ms: Long): ManagerBuilder = {
+    def getDelay(): Long = delay
+    def delay(ms: Long): Unit = {
       delay = ms
-      this
     }
-    def parallelism(threadNum: Int): ManagerBuilder = {
+    def parallelism(threadNum: Int): Unit = {
       parallelism = threadNum
-      this
     }
     override def build(): CrawlingManager = {
       new HostQueueManager(delay, parallelism)
     }
+    def branch(predicate: URL => Boolean): Unit ={
+
+    }
   }
+
+//  implicit val managerBuilder = new HostQueueManagerBuilder()
   implicit val managerBuilder = new DefaultManagerBuilder()
 
+//  object HostDelay {
+//    def apply(managerBuilder: HostQueueManagerBuilder, value: Long): HostDelay = new HostDelay()
+//  }
+  object HostDelay extends CrawlerOption[HostQueueManagerBuilder, Long] {
+//    var _pred: URL => Boolean = null
+//    def setPredicate(predicat: URL => Boolean): Unit = {
+//      _pred = predicat
+//    }
+    override def apply(managerBuilder: HostQueueManagerBuilder, value: Long): HostQueueManagerBuilder = {
+      managerBuilder.setDelay(value)
+      managerBuilder
+    }
+  }
   object Delay extends CrawlerOption[DefaultManagerBuilder, Long] {
-    override def apply(managerBuilder: DefaultManagerBuilder, value: Long): ManagerBuilder = {
+    override def apply(managerBuilder: DefaultManagerBuilder, value: Long): DefaultManagerBuilder = {
       managerBuilder.delay(value)
+      managerBuilder
     }
   }
   object Parallelism extends CrawlerOption[DefaultManagerBuilder, Int] {
-    override def apply(managerBuilder: DefaultManagerBuilder, value: Int): ManagerBuilder = {
+    override def apply(managerBuilder: DefaultManagerBuilder, value: Int): DefaultManagerBuilder = {
       managerBuilder.parallelism(value)
+      managerBuilder
     }
   }
+
+  implicit def host(host: String): URL => Boolean = url => url.getHost == host
+
+  implicit def url(url: String): URL => Boolean = url => url.toString == url
+
+//  ob
+
+
+//  object FlexibleDelay extends CrawlerOption[FlexibleManagerBuilder, Long] {
+//    override def apply(managerBuilder: FlexibleManagerBuilder, value: Long): ManagerBuilder = {
+//      managerBuilder.delay(value)
+//    }
+//  }
 
 
 }

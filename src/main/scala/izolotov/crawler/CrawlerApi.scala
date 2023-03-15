@@ -2,6 +2,7 @@ package izolotov.crawler
 
 import java.net.URL
 
+import izolotov.crawler.CrawlerApi.{InitialBranchBuilder, ManagerBuilder}
 import izolotov.crawler.CrawlerInput.{CrawlingQueue, Input, InputItem, QueueItem}
 import izolotov.crawler.DefaultCrawler.HostQueueManager
 
@@ -44,34 +45,229 @@ object CrawlerApi {
 //    def build(): Context
 //  }
 
+  trait UrlConfSetter {
+    def setInt(key: String, value: Int)
+  }
+
+  trait UrlConfGetter {
+    def getInt(key: String): Int
+  }
+
+  trait UrlConf extends UrlConfSetter with UrlConfGetter
+
   trait ManagerBuilder {
     def build(): CrawlingManager
   }
 
+//  trait UrlConf {
+//    def apply(extraction: URL => Unit): Unit
+//  }
+//
+//  class DefaultUrlConf() extends UrlConf {
+//    def apply(extraction: URL => Unit)
+//  }
 
+
+  trait Opt[A <: CrawlingManager, B] {
+    def set(manager: A, pf: PartialFunction[URL, B]): A
+  }
 
   trait CrawlerOption[A <: ManagerBuilder, B] {
-    def apply(managerBuilder: A, value: B): ManagerBuilder
+    def apply(managerBuilder: A, value: B): A
   }
+
+  abstract class PartialCrawlerOption[A <: ManagerBuilder, B] extends CrawlerOption[A, B] {
+//    def apply(managerBuilder: A, value: B): ManagerBuilder
+//    abstract def apply(managerBuilder: A, value: B): ManagerBuilder
+  }
+
 
 
 
   object Crawler {
-//    def read(data: mutable.Iterable[String]): InitialBranchBuilder = {
-//      val q = new mutable.Queue[String]()
-//      q ++= data
-//      new InitialBranchBuilder(data.map(s => InputItem(s)))
-//    }
-//    def flow(): CrawlerBuilder = {
-//      new CrawlerBuilder()
-//    }
-
-//    def flow()
+    def read[A <: ManagerBuilder](data: mutable.Iterable[String])(implicit managerBuilder: A): InitialBranchBuilder = {
+      new CrawlerBuilder[A](managerBuilder).read(data)
+    }
 
     def withSettings[A <: ManagerBuilder]()(implicit managerBuilder: A): CrawlerBuilder[A] = {
       new CrawlerBuilder(managerBuilder)
     }
+
+    def withHostSettings[A <: ManagerBuilder]()(implicit managerBuilder: A): InitialConfBuilder[A] = {
+      new InitialConfBuilder(managerBuilder)
+    }
+
+    def configure[A <: CrawlingManager]()(implicit manager: A): NewConfigurationBuilder[A] = {
+      new NewConfigurationBuilder(manager, _ => true)
+    }
+
+    def branchConfigure[A <: CrawlingManager]()(implicit manager: A): NewMultiHostConfigurationBuilder[A] = {
+      new NewMultiHostConfigurationBuilder[A](manager)
+    }
+
+//    def configure(): ConfigurationBuilder = {
+//
+//    }
   }
+
+//  class CrawlerBuilder[A <: ManagerBuilder](managerBuilder: A) {
+//    def read(data: mutable.Iterable[String]): InitialBranchBuilder = {
+//      val q = new mutable.Queue[String]()
+//      q ++= data
+//      new InitialBranchBuilder(Context(managerBuilder.build(), data.map(s => InputItem(s))))
+//    }
+//    def option[B](option: CrawlerOption[A, B], value: B): CrawlerBuilder[A] = {
+//      option.apply(managerBuilder, value)
+//      this
+//    }
+//  }
+
+  class NewConfigurationBuilder[A <: CrawlingManager](manager: A, predicate: URL => Boolean) {
+    def set[B](option: Opt[A, B], value: B): NewConfigurationBuilder[A] = {
+      val pf: PartialFunction[URL, B] = {case url if predicate.apply(url) => value}
+      option.set(manager, pf)
+      this
+    }
+//    def when(predicate: URL => Boolean): NewInitialBranchConfigurationBuilder[A] = {
+//      new NewInitialBranchConfigurationBuilder[A]
+//    }
+
+    def read(data: mutable.Iterable[String]): InitialBranchBuilder = {
+      val q = new mutable.Queue[String]()
+      q ++= data
+      new InitialBranchBuilder(Context(manager, data.map(s => InputItem(s))))
+    }
+  }
+
+  class NewMultiHostConfigurationBuilder[A <: CrawlingManager](manager: A) {
+    def set[B](option: Opt[A, B], value: B): NewMultiHostConfigurationBuilder[A] = {
+      val pf: PartialFunction[URL, B] = {case _ if true => value}
+      option.set(manager, pf)
+      this
+    }
+    def when(predicate: URL => Boolean): NewInitialBranchConfigurationBuilder[A] = {
+      new NewInitialBranchConfigurationBuilder[A](manager, predicate)
+    }
+
+//    class NewConfBranchBuilder[A <: ManagerBuilder](managerBuilder: A, predicate: URL => Boolean) {
+//      def option[B](option: CrawlerOption[A, B], value: B): ConfBuilder[A] = {
+//        val f: PartialFunction[URL, A] = {case url if predicate.apply(url) => option.apply(managerBuilder, value)}
+//        new ConfBuilder(managerBuilder, f)
+//      }
+//    }
+  }
+
+  class NewInitialBranchConfigurationBuilder[A <: CrawlingManager](manager: A, predicate: URL => Boolean) {
+    def set[B](option: Opt[A, B], value: B): NewHostConfigurationBuilder[A] = {
+      val pf: PartialFunction[URL, B] = {case url if predicate.apply(url) => value}
+      option.set(manager, pf)
+      new NewHostConfigurationBuilder(manager, predicate)
+    }
+  }
+
+  class NewHostConfigurationBuilder[A <: CrawlingManager](manager: A, predicate: URL => Boolean) {
+    def set[B](option: Opt[A, B], value: B): NewHostConfigurationBuilder[A] = {
+      val pf: PartialFunction[URL, B] = {case url if predicate.apply(url) => value}
+      option.set(manager, pf)
+      this
+    }
+    def otherwise(): NewFinalBranchConfigurationBuilder[A] = {
+      new NewFinalBranchConfigurationBuilder(manager)
+    }
+  }
+
+  class NewFinalBranchConfigurationBuilder[A <: CrawlingManager](manager: A) {
+    def set[B](option: Opt[A, B], value: B): NewFinalBranchConfigurationBuilder[A] = {
+      val pf: PartialFunction[URL, B] = {case _ if true => value}
+      option.set(manager, pf)
+      this
+    }
+    def read(data: mutable.Iterable[String]): InitialBranchBuilder = {
+      val q = new mutable.Queue[String]()
+      q ++= data
+      new InitialBranchBuilder(Context(manager, data.map(s => InputItem(s))))
+    }
+  }
+
+//    def withSettings[A <: ManagerBuilder]()(implicit managerBuilder: A): CrawlerBuilder[A] = {
+//      new CrawlerBuilder(managerBuilder)
+//    }
+//
+//    def withHostSettings[A <: UrlConf]()(implicit urlConfFactory: () => A): InitialConfBuilder[A] = {
+//      new InitialConfBuilder(urlConfFactory)
+//    }
+//  }
+//
+  class InitialConfBuilder[A <: ManagerBuilder](managerBuilder: A) {
+    def when(predicate: URL => Boolean): NewConfBranchBuilder[A] = {
+      new NewConfBranchBuilder[A](managerBuilder, predicate)
+    }
+  }
+
+  class NewConfBranchBuilder[A <: ManagerBuilder](managerBuilder: A, predicate: URL => Boolean) {
+    def option[B](option: CrawlerOption[A, B], value: B): ConfBuilder[A] = {
+      val f: PartialFunction[URL, A] = {case url if predicate.apply(url) => option.apply(managerBuilder, value)}
+      new ConfBuilder(managerBuilder, f)
+    }
+  }
+
+  class SuccessiveConfBranchBuilder[A <: ManagerBuilder](managerBuilder: A, predicate: URL => Boolean, pf: PartialFunction[URL, A]) {
+    def option[B](option: CrawlerOption[A, B], value: B): ConfBuilder[A] = {
+      val f: PartialFunction[URL, A] = {case url if predicate.apply(url) => option.apply(managerBuilder, value)}
+      new ConfBuilder(managerBuilder, pf.orElse(f))
+    }
+  }
+
+  class FinalConfBranchBuilder[A <: ManagerBuilder](managerBuilder: A, pf: PartialFunction[URL, A]) {
+//    def option[B](option: CrawlerOption[A, B], value: B): FinalConfBuilder[A] = {
+//      val f: PartialFunction[URL, A] = {case url if true => option.apply(mb, value)}
+////      val a: PartialFunction[URL, A] = pf.orElse(f)
+//      new FinalConfBuilder(pf.orElse(f))
+//    }
+    def option[B](option: CrawlerOption[A, B], value: B): FinalConfBuilder[A] = {
+      val f: PartialFunction[URL, A] = {case _ if true => option.apply(managerBuilder, value)}
+      new FinalConfBuilder(managerBuilder, pf.orElse(f))
+    }
+
+    def read(data: mutable.Iterable[String]): InitialBranchBuilder = {
+      val q = new mutable.Queue[String]()
+      q ++= data
+      new InitialBranchBuilder(Context(null, data.map(s => InputItem(s))))
+    }
+  }
+//
+////  class NewConfBuilder[A <: ManagerBuilder](mb: A, pf: PartialFunction[URL, A]) {
+////    def option[B](option: CrawlerOption[A, B], value: B): ConfBuilder[A] = {
+////      val f: Function[A, A] = mb => option.apply(mb, value)
+////      new ConfBuilder[A](mb, pf.andThen(f))
+////    }
+////  }
+//
+  class ConfBuilder[A <: ManagerBuilder](managerBuilder: A, pf: PartialFunction[URL, A]) {
+    def option[B](option: CrawlerOption[A, B], value: B): ConfBuilder[A] = {
+      val f: Function[A, A] = mb => option.apply(mb, value)
+      new ConfBuilder(managerBuilder, pf.andThen(f))
+    }
+    def when(predicate: URL => Boolean): SuccessiveConfBranchBuilder[A] = {
+      new SuccessiveConfBranchBuilder[A](managerBuilder, predicate, pf)
+    }
+    def otherwise(): FinalConfBranchBuilder[A] = {
+      new FinalConfBranchBuilder[A](managerBuilder, pf)
+    }
+  }
+
+  class FinalConfBuilder[A <: ManagerBuilder](managerBuilder: A, pf: PartialFunction[URL, A]) {
+    def option[B](option: CrawlerOption[A, B], value: B): ConfBuilder[A] = {
+      val f: Function[A, A] = mb => option.apply(mb, value)
+      new ConfBuilder(managerBuilder, pf.andThen(f))
+    }
+    def read(data: mutable.Iterable[String]): InitialBranchBuilder = {
+      val q = new mutable.Queue[String]()
+      q ++= data
+      new InitialBranchBuilder(Context(managerBuilder.build(), data.map(s => InputItem(s))))
+    }
+  }
+
 
   class CrawlerBuilder[A <: ManagerBuilder](managerBuilder: A) {
     def read(data: mutable.Iterable[String]): InitialBranchBuilder = {
@@ -83,7 +279,10 @@ object CrawlerApi {
       option.apply(managerBuilder, value)
       this
     }
-//    def builder: ManagerBuilder = managerBuilder
+  }
+
+  class FlexibleCrawlerBuilder[A <: ManagerBuilder](managerBuilder: A) {
+
   }
 
 //  class SettingsBuilder((context: Context) {

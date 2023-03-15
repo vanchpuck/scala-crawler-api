@@ -1,5 +1,6 @@
 package izolotov.crawler
 
+import izolotov.crawler.CrawlerApi.UrlConf
 import izolotov.crawler.CrawlerInput.QueueItem
 
 trait CrawlingManager {
