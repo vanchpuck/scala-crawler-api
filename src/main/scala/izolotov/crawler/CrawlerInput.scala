@@ -15,15 +15,15 @@ object CrawlerInput {
 
   case class InputItem(url: String) extends Input{
     def onPickUp(): Unit = {
-      println(s"${url.toString} picked up")
+      println(s"${url.toString} queue item on pick up")
     }
 
     def onSuccess(): Unit = {
-      println(s"${url.toString} success")
+      println(s"${url.toString} queue item on success")
     }
 
     def onFailure(throwable: Throwable): Unit = {
-      println(s"${url.toString} failure")
+      println(s"${url.toString} queue item on failure")
     }
   }
 

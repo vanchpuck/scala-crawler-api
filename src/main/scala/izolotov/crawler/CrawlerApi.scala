@@ -6,10 +6,12 @@ import izolotov.crawler.CrawlerApi.{InitialBranchBuilder, ManagerBuilder}
 import izolotov.crawler.CrawlerInput.{CrawlingQueue, Input, InputItem, QueueItem}
 import izolotov.crawler.DefaultCrawler.HostQueueManager
 
+import scala.collection.mutable
+
 //import izolotov.Sandbox.{CrawlingQueue, InputItem, Manager, QueueItem}
 
 import scala.collection.mutable
-import scala.util.Try
+import scala.util.{Try,Success,Failure}
 
 object CrawlerApi {
 
@@ -39,6 +41,8 @@ object CrawlerApi {
 //  }
   case class Context(manager: CrawlingManager, queue: mutable.Iterable[Input])
 
+  case class RichContext(manager: RichManager, queue: mutable.Iterable[Input])
+
 //  trait ContextBuilder {
 //    def withManager(): CrawlingManager
 //    def withQueue(): mutable.Iterable[Input]
@@ -67,6 +71,10 @@ object CrawlerApi {
 //    def apply(extraction: URL => Unit)
 //  }
 
+
+  trait RichOption[Manager <: RichManager, Value] {
+    def set(manager: Manager, pf: PartialFunction[URL, Value]): Manager
+  }
 
   trait Opt[A <: CrawlingManager, B] {
     def set(manager: A, pf: PartialFunction[URL, B]): A
@@ -105,9 +113,99 @@ object CrawlerApi {
       new NewMultiHostConfigurationBuilder[A](manager)
     }
 
-//    def configure(): ConfigurationBuilder = {
-//
-//    }
+    def richConfigure[A <: RichManager]()(implicit manager: A): RichConfigurationDefaultFetcherBuilder[A] = {
+      new RichConfigurationDefaultFetcherBuilder[A](manager)
+    }
+
+  }
+
+  class RichConfigurationDefaultFetcherBuilder[Manager <: RichManager](manager: Manager) {
+    def setFetcher[Raw](fetcher: URL => Raw)(implicit c: RedirectAnalyzer[Raw]): RichConfigurationDefaultParserBuilder[Raw, Manager] = {
+      new RichConfigurationDefaultParserBuilder[Raw, Manager](manager, fetcher)
+    }
+  }
+  class RichConfigurationDefaultParserBuilder[Raw, Manager <: RichManager](manager: Manager, defFetcher: URL => Raw) {
+    def setParser[Doc](parser: Raw => Doc): RichConfigurationDefaultWriterBuilder[Raw, Doc, Manager] = {
+      new RichConfigurationDefaultWriterBuilder[Raw, Doc, Manager](manager, defFetcher, parser)
+    }
+  }
+  class RichConfigurationDefaultWriterBuilder[Raw, Doc, Manager <: RichManager](manager: Manager,
+                                                                                defFetcher: URL => Raw,
+                                                                                defParser: Raw => Doc) {
+    def setWriter(writer: Doc => Unit): RichConfigurationDefaultOptionBuilder[Raw, Doc, Manager] = {
+      val pf: PartialFunction[URL, URL => Unit] = {case _ if true => defFetcher.andThen(defParser).andThen(writer)}
+      manager.setExtractor(pf)
+      new RichConfigurationDefaultOptionBuilder[Raw, Doc, Manager](manager, (defFetcher, defParser, writer))
+    }
+  }
+  class RichConfigurationDefaultOptionBuilder[Raw, Doc, Manager <: RichManager](manager: Manager,
+                                                                                default: (URL => Raw, Raw => Doc, Doc => Unit)) {
+    def set[Value](option: RichOption[Manager, Value], value: Value): RichConfigurationDefaultOptionBuilder[Raw, Doc, Manager] = {
+      val pf: PartialFunction[URL, Value] = {case _ if true => value}
+      option.set(manager, pf)
+      this
+    }
+    def when(predicate: URL => Boolean): RichBranchConfigurationFetcherBuilder[Raw, Doc, Manager] = {
+      new RichBranchConfigurationFetcherBuilder[Raw, Doc, Manager](predicate, manager, default)
+    }
+    def read(data: mutable.Iterable[String]): StarterBuilder = {
+      val q = new mutable.Queue[String]()
+      q ++= data
+      new StarterBuilder(RichContext(manager, data.map(s => InputItem(s))))
+    }
+  }
+
+  class RichBranchConfigurationFetcherBuilder[DefRaw, DefDoc, Manager <: RichManager](predicate: URL => Boolean,
+                                                                                      manager: Manager,
+                                                                                      default: (URL => DefRaw, DefRaw => DefDoc, DefDoc => Unit)) {
+    def setFetcher[Raw](fetcher: URL => Raw)(implicit c: RedirectAnalyzer[Raw]): RichBranchConfigurationParserBuilder[Raw, DefRaw, DefDoc, Manager] = {
+      new RichBranchConfigurationParserBuilder[Raw, DefRaw, DefDoc, Manager](predicate, manager, fetcher, default)
+    }
+    def setParser[Doc](parser: DefRaw => Doc): RichBranchConfigurationWriterBuilder[DefRaw, Doc, DefRaw, DefDoc, Manager] = {
+      new RichBranchConfigurationWriterBuilder[DefRaw, Doc, DefRaw, DefDoc, Manager](predicate, manager, default._1.andThen(parser), default)
+    }
+    def setWriter[Doc](writer: DefDoc => Unit): RichConfigurationOptionBuilder[DefRaw, DefDoc, Manager] = {
+      val pf: PartialFunction[URL, URL => Unit] = {case url if predicate.apply(url) => default._1.andThen(default._2).andThen(writer)}
+      manager.setExtractor(pf)
+      new RichConfigurationOptionBuilder[DefRaw, DefDoc, Manager](predicate, manager, default)
+    }
+  }
+  class RichBranchConfigurationParserBuilder[Raw, DefRaw, DefDoc, Manager <: RichManager](predicate: URL => Boolean,
+                                                                                          manager: Manager,
+                                                                                          pipeline: URL => Raw,
+                                                                                          default: (URL => DefRaw, DefRaw => DefDoc, DefDoc => Unit)) {
+    def setParser[Doc](parser: Raw => Doc): RichBranchConfigurationWriterBuilder[Raw, Doc, DefRaw, DefDoc, Manager] = {
+      new RichBranchConfigurationWriterBuilder[Raw, Doc, DefRaw, DefDoc, Manager](predicate, manager, pipeline.andThen(parser), default)
+    }
+
+  }
+  class RichBranchConfigurationWriterBuilder[Raw, Doc, DefRaw, DefDoc, Manager <: RichManager](predicate: URL => Boolean,
+                                                                                               manager: Manager,
+                                                                                               pipeline: URL => Doc,
+                                                                                               default: (URL => DefRaw, DefRaw => DefDoc, DefDoc => Unit)) {
+    def setWriter(writer: Doc => Unit): RichConfigurationOptionBuilder[DefRaw, DefDoc, Manager] = {
+      val pf: PartialFunction[URL, URL => Unit] = {case url if predicate(url) => pipeline.andThen(writer)}
+      manager.setExtractor(pf)
+      new RichConfigurationOptionBuilder[DefRaw, DefDoc, Manager](predicate, manager, default)
+    }
+  }
+
+  class RichConfigurationOptionBuilder[Raw, Doc, Manager <: RichManager](predicate: URL => Boolean,
+                                                                         manager: Manager,
+                                                                         default: (URL => Raw, Raw => Doc, Doc => Unit)) {
+    def set[Value](option: RichOption[Manager, Value], value: Value): RichConfigurationOptionBuilder[Raw, Doc, Manager] = {
+      val pf: PartialFunction[URL, Value] = {case url if predicate(url) => value}
+      option.set(manager, pf)
+      this
+    }
+    def when(predicate: URL => Boolean): RichBranchConfigurationFetcherBuilder[Raw, Doc, Manager] = {
+      new RichBranchConfigurationFetcherBuilder[Raw, Doc, Manager](predicate, manager, default)
+    }
+    def read(data: mutable.Iterable[String]): StarterBuilder = {
+      val q = new mutable.Queue[String]()
+      q ++= data
+      new StarterBuilder(RichContext(manager, data.map(s => InputItem(s))))
+    }
   }
 
 //  class CrawlerBuilder[A <: ManagerBuilder](managerBuilder: A) {
@@ -288,6 +386,29 @@ object CrawlerApi {
 //  class SettingsBuilder((context: Context) {
 ////    def op
 //  }
+
+  class StarterBuilder(context: RichContext) {
+    def crawl(): Unit = {
+      context.queue.foreach{
+        inItem =>
+          inItem.onPickUp()
+          try {
+            QueueItem(inItem, new URL(inItem.url), 0)
+//            val qItem = Try(QueueItem(inItem, new URL(inItem.url), 0)).recover(e => throw new URLParsingException(inItem.url, e)).get
+            val f = context.manager.manage(QueueItem(inItem, new URL(inItem.url), 0))
+          } catch {
+            case exc: CrawlingException => {
+              inItem.onFailure(exc)
+            }
+          }
+      }
+    }
+  }
+  class RichStarterBuilder(f: Function[String, Unit], data: mutable.Iterable[String]) {
+    def crawl(): Unit = {
+      data.foreach(item => f.apply(item))
+    }
+  }
 
   class InitialBranchBuilder(context: Context/*queue: mutable.Iterable[Input]*/) {
     //    def fetch[Raw](fetcher: String => Raw): ParserBuilder[Raw] = {

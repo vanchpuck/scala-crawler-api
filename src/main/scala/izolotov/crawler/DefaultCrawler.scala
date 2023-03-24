@@ -165,6 +165,7 @@ object DefaultCrawler {
 
   class HttpFetcher[T](bodyHandler: HttpResponse.BodyHandler[T]) {
     def fetch(url: URL)(implicit client: HttpClient): HttpResponse[T] = {
+      println(f"Fetch: ${url}")
       val request = HttpRequest.newBuilder()
         .uri(url.toURI)
         .build()
@@ -235,7 +236,7 @@ object DefaultCrawler {
 
   implicit def host(host: String): URL => Boolean = url => url.getHost == host
 
-  implicit def url(url: String): URL => Boolean = url => url.toString == url
+  implicit def url(url: String): URL => Boolean = urlObj => urlObj.toString == url
 
 //  ob
 
