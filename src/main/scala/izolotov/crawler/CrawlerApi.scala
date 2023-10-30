@@ -4,6 +4,7 @@ import java.net.URL
 
 import izolotov.crawler.CrawlerApi.{InitialBranchBuilder, ManagerBuilder}
 import izolotov.crawler.CrawlerInput.{CrawlingQueue, Input, InputItem, QueueItem}
+import izolotov.crawler.CrawlerParameterBuilder.DefaultBuilder
 import izolotov.crawler.DefaultCrawler.HostQueueManager
 
 import scala.collection.mutable
@@ -72,13 +73,17 @@ object CrawlerApi {
 //  }
 
 
-  trait RichOption[Manager <: RichManager, Value] {
-    def set(manager: Manager, pf: PartialFunction[URL, Value]): Manager
-  }
-
-  trait Opt[A <: CrawlingManager, B] {
-    def set(manager: A, pf: PartialFunction[URL, B]): A
-  }
+//  trait RichOption[Manager <: RichManager, Value] {
+//    def set(manager: Manager, pf: PartialFunction[URL, Value]): Manager
+//  }
+//
+//  sealed trait MandatoryRichOption[Manager <: RichManager, Value] extends RichOption[Manager, Value]
+//
+//  trait RichFetcher[Manager <: RichManager, Raw] extends MandatoryRichOption[Manager, Raw]
+//
+//  trait Opt[A <: CrawlingManager, B] {
+//    def set(manager: A, pf: PartialFunction[URL, B]): A
+//  }
 
   trait CrawlerOption[A <: ManagerBuilder, B] {
     def apply(managerBuilder: A, value: B): A
@@ -109,104 +114,136 @@ object CrawlerApi {
       new NewConfigurationBuilder(manager, _ => true)
     }
 
-    def branchConfigure[A <: CrawlingManager]()(implicit manager: A): NewMultiHostConfigurationBuilder[A] = {
-      new NewMultiHostConfigurationBuilder[A](manager)
-    }
+//    def branchConfigure[A <: CrawlingManager]()(implicit manager: A): NewMultiHostConfigurationBuilder[A] = {
+//      new NewMultiHostConfigurationBuilder[A](manager)
+//    }
 
-    def richConfigure[A <: RichManager]()(implicit manager: A): RichConfigurationDefaultFetcherBuilder[A] = {
-      new RichConfigurationDefaultFetcherBuilder[A](manager)
-    }
+//    def richConfigure[A <: RichManager]()(implicit manager: A): RichConfigurationDefaultBuilder[A] = {
+//      new RichConfigurationDefaultBuilder[A](manager)
+//    }
+//
+//    def newRichConfigure[A <: RichManager]()(implicit manager: A): RichConfigurationDefaultBuilder[A] = {
+//      new RichConfigurationDefaultBuilder[A](manager)
+//    }
 
-  }
-
-  class RichConfigurationDefaultFetcherBuilder[Manager <: RichManager](manager: Manager) {
-    def setFetcher[Raw](fetcher: URL => Raw)(implicit c: RedirectAnalyzer[Raw]): RichConfigurationDefaultParserBuilder[Raw, Manager] = {
-      new RichConfigurationDefaultParserBuilder[Raw, Manager](manager, fetcher)
-    }
-  }
-  class RichConfigurationDefaultParserBuilder[Raw, Manager <: RichManager](manager: Manager, defFetcher: URL => Raw) {
-    def setParser[Doc](parser: Raw => Doc): RichConfigurationDefaultWriterBuilder[Raw, Doc, Manager] = {
-      new RichConfigurationDefaultWriterBuilder[Raw, Doc, Manager](manager, defFetcher, parser)
-    }
-  }
-  class RichConfigurationDefaultWriterBuilder[Raw, Doc, Manager <: RichManager](manager: Manager,
-                                                                                defFetcher: URL => Raw,
-                                                                                defParser: Raw => Doc) {
-    def setWriter(writer: Doc => Unit): RichConfigurationDefaultOptionBuilder[Raw, Doc, Manager] = {
-      val pf: PartialFunction[URL, URL => Unit] = {case _ if true => defFetcher.andThen(defParser).andThen(writer)}
-      manager.setExtractor(pf)
-      new RichConfigurationDefaultOptionBuilder[Raw, Doc, Manager](manager, (defFetcher, defParser, writer))
-    }
-  }
-  class RichConfigurationDefaultOptionBuilder[Raw, Doc, Manager <: RichManager](manager: Manager,
-                                                                                default: (URL => Raw, Raw => Doc, Doc => Unit)) {
-    def set[Value](option: RichOption[Manager, Value], value: Value): RichConfigurationDefaultOptionBuilder[Raw, Doc, Manager] = {
-      val pf: PartialFunction[URL, Value] = {case _ if true => value}
-      option.set(manager, pf)
-      this
-    }
-    def when(predicate: URL => Boolean): RichBranchConfigurationFetcherBuilder[Raw, Doc, Manager] = {
-      new RichBranchConfigurationFetcherBuilder[Raw, Doc, Manager](predicate, manager, default)
-    }
-    def read(data: mutable.Iterable[String]): StarterBuilder = {
-      val q = new mutable.Queue[String]()
-      q ++= data
-      new StarterBuilder(RichContext(manager, data.map(s => InputItem(s))))
-    }
-  }
-
-  class RichBranchConfigurationFetcherBuilder[DefRaw, DefDoc, Manager <: RichManager](predicate: URL => Boolean,
-                                                                                      manager: Manager,
-                                                                                      default: (URL => DefRaw, DefRaw => DefDoc, DefDoc => Unit)) {
-    def setFetcher[Raw](fetcher: URL => Raw)(implicit c: RedirectAnalyzer[Raw]): RichBranchConfigurationParserBuilder[Raw, DefRaw, DefDoc, Manager] = {
-      new RichBranchConfigurationParserBuilder[Raw, DefRaw, DefDoc, Manager](predicate, manager, fetcher, default)
-    }
-    def setParser[Doc](parser: DefRaw => Doc): RichBranchConfigurationWriterBuilder[DefRaw, Doc, DefRaw, DefDoc, Manager] = {
-      new RichBranchConfigurationWriterBuilder[DefRaw, Doc, DefRaw, DefDoc, Manager](predicate, manager, default._1.andThen(parser), default)
-    }
-    def setWriter[Doc](writer: DefDoc => Unit): RichConfigurationOptionBuilder[DefRaw, DefDoc, Manager] = {
-      val pf: PartialFunction[URL, URL => Unit] = {case url if predicate.apply(url) => default._1.andThen(default._2).andThen(writer)}
-      manager.setExtractor(pf)
-      new RichConfigurationOptionBuilder[DefRaw, DefDoc, Manager](predicate, manager, default)
-    }
-  }
-  class RichBranchConfigurationParserBuilder[Raw, DefRaw, DefDoc, Manager <: RichManager](predicate: URL => Boolean,
-                                                                                          manager: Manager,
-                                                                                          pipeline: URL => Raw,
-                                                                                          default: (URL => DefRaw, DefRaw => DefDoc, DefDoc => Unit)) {
-    def setParser[Doc](parser: Raw => Doc): RichBranchConfigurationWriterBuilder[Raw, Doc, DefRaw, DefDoc, Manager] = {
-      new RichBranchConfigurationWriterBuilder[Raw, Doc, DefRaw, DefDoc, Manager](predicate, manager, pipeline.andThen(parser), default)
+    def conf(): CrawlerParameterBuilder.ConfBuilder = {
+      new CrawlerParameterBuilder.ConfBuilder()
     }
 
   }
-  class RichBranchConfigurationWriterBuilder[Raw, Doc, DefRaw, DefDoc, Manager <: RichManager](predicate: URL => Boolean,
-                                                                                               manager: Manager,
-                                                                                               pipeline: URL => Doc,
-                                                                                               default: (URL => DefRaw, DefRaw => DefDoc, DefDoc => Unit)) {
-    def setWriter(writer: Doc => Unit): RichConfigurationOptionBuilder[DefRaw, DefDoc, Manager] = {
-      val pf: PartialFunction[URL, URL => Unit] = {case url if predicate(url) => pipeline.andThen(writer)}
-      manager.setExtractor(pf)
-      new RichConfigurationOptionBuilder[DefRaw, DefDoc, Manager](predicate, manager, default)
-    }
-  }
 
-  class RichConfigurationOptionBuilder[Raw, Doc, Manager <: RichManager](predicate: URL => Boolean,
-                                                                         manager: Manager,
-                                                                         default: (URL => Raw, Raw => Doc, Doc => Unit)) {
-    def set[Value](option: RichOption[Manager, Value], value: Value): RichConfigurationOptionBuilder[Raw, Doc, Manager] = {
-      val pf: PartialFunction[URL, Value] = {case url if predicate(url) => value}
-      option.set(manager, pf)
-      this
-    }
-    def when(predicate: URL => Boolean): RichBranchConfigurationFetcherBuilder[Raw, Doc, Manager] = {
-      new RichBranchConfigurationFetcherBuilder[Raw, Doc, Manager](predicate, manager, default)
-    }
-    def read(data: mutable.Iterable[String]): StarterBuilder = {
-      val q = new mutable.Queue[String]()
-      q ++= data
-      new StarterBuilder(RichContext(manager, data.map(s => InputItem(s))))
-    }
-  }
+//  trait HasManager[Manager] {
+//    def manager(): Manager
+//  }
+//
+//  trait OptionSetter[Manager, Value, Raw, Doc] extends HasManager[Manager] {
+//    def set[Value](option: RichOption[Manager, Value], value: Value): RichConfigurationDefaultOptionBuilder[Raw, Doc, Manager] = {
+//      val pf: PartialFunction[URL, Value] = {case _ if true => value}
+//      option.set(manager, pf)
+//      this
+//    }
+//  }
+
+
+//  class RichConfigurationDefaultBuilder[Manager <: RichManager](manager: Manager) {
+//    def default(): RichConfigurationDefaultFetcherBuilder[Manager] = {
+//      new RichConfigurationDefaultFetcherBuilder(manager)
+//    }
+//  }
+//
+//  class RichConfigurationDefaultFetcherBuilder[Manager <: RichManager](manager: Manager) {
+//    def setFetcher[Raw](fetcher: URL => Raw)(implicit c: RedirectAnalyzer[Raw]): RichConfigurationDefaultParserBuilder[Raw, Manager] = {
+//      new RichConfigurationDefaultParserBuilder[Raw, Manager](manager, fetcher)
+//    }
+//  }
+//  class RichConfigurationDefaultParserBuilder[Raw, Manager <: RichManager](manager: Manager, defFetcher: URL => Raw) {
+//    def setParser[Doc](parser: Raw => Doc): RichConfigurationDefaultWriterBuilder[Raw, Doc, Manager] = {
+//      new RichConfigurationDefaultWriterBuilder[Raw, Doc, Manager](manager, defFetcher, parser)
+//    }
+//  }
+//  class RichConfigurationDefaultWriterBuilder[Raw, Doc, Manager <: RichManager](manager: Manager,
+//                                                                                defFetcher: URL => Raw,
+//                                                                                defParser: Raw => Doc) {
+//    def setWriter(writer: Doc => Unit): RichConfigurationDefaultOptionBuilder[Raw, Doc, Manager] = {
+//      val pf: PartialFunction[URL, URL => Unit] = {case _ if true => defFetcher.andThen(defParser).andThen(writer)}
+//      manager.setExtractor(pf)
+//      new RichConfigurationDefaultOptionBuilder[Raw, Doc, Manager](manager, (defFetcher, defParser, writer))
+//    }
+//  }
+//  class RichConfigurationDefaultOptionBuilder[Raw, Doc, Manager <: RichManager](manager: Manager,
+//                                                                                default: (URL => Raw, Raw => Doc, Doc => Unit)) {
+//    def set[Value](option: RichOption[Manager, Value], value: Value): RichConfigurationDefaultOptionBuilder[Raw, Doc, Manager] = {
+//      val pf: PartialFunction[URL, Value] = {case _ if true => value}
+//      option.set(manager, pf)
+//      this
+//    }
+//    def when(predicate: URL => Boolean): RichBranchConfigurationFetcherBuilder[Raw, Doc, Manager] = {
+//      new RichBranchConfigurationFetcherBuilder[Raw, Doc, Manager](predicate, manager, default)
+//    }
+//    def read(data: mutable.Iterable[String]): ForEachBuilder = {
+//      val q = new mutable.Queue[String]()
+//      q ++= data
+//      new ForEachBuilder(RichContext(manager, data.map(s => InputItem(s))))
+//    }
+//  }
+
+//  class RichBranchConfigurationFetcherBuilder[DefRaw, DefDoc, Manager <: RichManager](predicate: URL => Boolean,
+//                                                                                      manager: Manager,
+//                                                                                      default: (URL => DefRaw, DefRaw => DefDoc, DefDoc => Unit)) {
+//    def setFetcher[Raw](fetcher: URL => Raw)(implicit c: RedirectAnalyzer[Raw]): RichBranchConfigurationParserBuilder[Raw, DefRaw, DefDoc, Manager] = {
+//      new RichBranchConfigurationParserBuilder[Raw, DefRaw, DefDoc, Manager](predicate, manager, fetcher, default)
+//    }
+//    def setParser[Doc](parser: DefRaw => Doc): RichBranchConfigurationWriterBuilder[DefRaw, Doc, DefRaw, DefDoc, Manager] = {
+//      new RichBranchConfigurationWriterBuilder[DefRaw, Doc, DefRaw, DefDoc, Manager](predicate, manager, default._1.andThen(parser), default)
+//    }
+//    def setWriter[Doc](writer: DefDoc => Unit): RichConfigurationOptionBuilder[DefRaw, DefDoc, Manager] = {
+//      val pf: PartialFunction[URL, URL => Unit] = {case url if predicate.apply(url) => default._1.andThen(default._2).andThen(writer)}
+//      manager.setExtractor(pf)
+//      new RichConfigurationOptionBuilder[DefRaw, DefDoc, Manager](predicate, manager, default)
+//    }
+//    def set[Value](option: RichOption[Manager, Value], value: Value): RichConfigurationOptionBuilder[DefRaw, DefDoc, Manager] = {
+//      val pf: PartialFunction[URL, Value] = {case url if predicate(url) => value}
+//      option.set(manager, pf)
+//      new RichConfigurationOptionBuilder[DefRaw, DefDoc, Manager](predicate, manager, default)
+//    }
+//  }
+//  class RichBranchConfigurationParserBuilder[Raw, DefRaw, DefDoc, Manager <: RichManager](predicate: URL => Boolean,
+//                                                                                          manager: Manager,
+//                                                                                          pipeline: URL => Raw,
+//                                                                                          default: (URL => DefRaw, DefRaw => DefDoc, DefDoc => Unit)) {
+//    def setParser[Doc](parser: Raw => Doc): RichBranchConfigurationWriterBuilder[Raw, Doc, DefRaw, DefDoc, Manager] = {
+//      new RichBranchConfigurationWriterBuilder[Raw, Doc, DefRaw, DefDoc, Manager](predicate, manager, pipeline.andThen(parser), default)
+//    }
+//
+//  }
+//  class RichBranchConfigurationWriterBuilder[Raw, Doc, DefRaw, DefDoc, Manager <: RichManager](predicate: URL => Boolean,
+//                                                                                               manager: Manager,
+//                                                                                               pipeline: URL => Doc,
+//                                                                                               default: (URL => DefRaw, DefRaw => DefDoc, DefDoc => Unit)) {
+//    def setWriter(writer: Doc => Unit): RichConfigurationOptionBuilder[DefRaw, DefDoc, Manager] = {
+//      val pf: PartialFunction[URL, URL => Unit] = {case url if predicate(url) => pipeline.andThen(writer)}
+//      manager.setExtractor(pf)
+//      new RichConfigurationOptionBuilder[DefRaw, DefDoc, Manager](predicate, manager, default)
+//    }
+//  }
+//
+//  class RichConfigurationOptionBuilder[Raw, Doc, Manager <: RichManager](predicate: URL => Boolean,
+//                                                                         manager: Manager,
+//                                                                         default: (URL => Raw, Raw => Doc, Doc => Unit)) {
+//    def set[Value](option: RichOption[Manager, Value], value: Value): RichConfigurationOptionBuilder[Raw, Doc, Manager] = {
+//      val pf: PartialFunction[URL, Value] = {case url if predicate(url) => value}
+//      option.set(manager, pf)
+//      this
+//    }
+//    def when(predicate: URL => Boolean): RichBranchConfigurationFetcherBuilder[Raw, Doc, Manager] = {
+//      new RichBranchConfigurationFetcherBuilder[Raw, Doc, Manager](predicate, manager, default)
+//    }
+//    def read(data: mutable.Iterable[String]): ForEachBuilder = {
+//      val q = new mutable.Queue[String]()
+//      q ++= data
+//      new ForEachBuilder(RichContext(manager, data.map(s => InputItem(s))))
+//    }
+//  }
 
 //  class CrawlerBuilder[A <: ManagerBuilder](managerBuilder: A) {
 //    def read(data: mutable.Iterable[String]): InitialBranchBuilder = {
@@ -221,11 +258,11 @@ object CrawlerApi {
 //  }
 
   class NewConfigurationBuilder[A <: CrawlingManager](manager: A, predicate: URL => Boolean) {
-    def set[B](option: Opt[A, B], value: B): NewConfigurationBuilder[A] = {
-      val pf: PartialFunction[URL, B] = {case url if predicate.apply(url) => value}
-      option.set(manager, pf)
-      this
-    }
+//    def set[B](option: Opt[A, B], value: B): NewConfigurationBuilder[A] = {
+//      val pf: PartialFunction[URL, B] = {case url if predicate.apply(url) => value}
+//      option.set(manager, pf)
+//      this
+//    }
 //    def when(predicate: URL => Boolean): NewInitialBranchConfigurationBuilder[A] = {
 //      new NewInitialBranchConfigurationBuilder[A]
 //    }
@@ -237,55 +274,55 @@ object CrawlerApi {
     }
   }
 
-  class NewMultiHostConfigurationBuilder[A <: CrawlingManager](manager: A) {
-    def set[B](option: Opt[A, B], value: B): NewMultiHostConfigurationBuilder[A] = {
-      val pf: PartialFunction[URL, B] = {case _ if true => value}
-      option.set(manager, pf)
-      this
-    }
-    def when(predicate: URL => Boolean): NewInitialBranchConfigurationBuilder[A] = {
-      new NewInitialBranchConfigurationBuilder[A](manager, predicate)
-    }
-
-//    class NewConfBranchBuilder[A <: ManagerBuilder](managerBuilder: A, predicate: URL => Boolean) {
-//      def option[B](option: CrawlerOption[A, B], value: B): ConfBuilder[A] = {
-//        val f: PartialFunction[URL, A] = {case url if predicate.apply(url) => option.apply(managerBuilder, value)}
-//        new ConfBuilder(managerBuilder, f)
-//      }
+//  class NewMultiHostConfigurationBuilder[A <: CrawlingManager](manager: A) {
+////    def set[B](option: Opt[A, B], value: B): NewMultiHostConfigurationBuilder[A] = {
+////      val pf: PartialFunction[URL, B] = {case _ if true => value}
+////      option.set(manager, pf)
+////      this
+////    }
+//    def when(predicate: URL => Boolean): NewInitialBranchConfigurationBuilder[A] = {
+//      new NewInitialBranchConfigurationBuilder[A](manager, predicate)
 //    }
-  }
+//
+////    class NewConfBranchBuilder[A <: ManagerBuilder](managerBuilder: A, predicate: URL => Boolean) {
+////      def option[B](option: CrawlerOption[A, B], value: B): ConfBuilder[A] = {
+////        val f: PartialFunction[URL, A] = {case url if predicate.apply(url) => option.apply(managerBuilder, value)}
+////        new ConfBuilder(managerBuilder, f)
+////      }
+////    }
+//  }
 
-  class NewInitialBranchConfigurationBuilder[A <: CrawlingManager](manager: A, predicate: URL => Boolean) {
-    def set[B](option: Opt[A, B], value: B): NewHostConfigurationBuilder[A] = {
-      val pf: PartialFunction[URL, B] = {case url if predicate.apply(url) => value}
-      option.set(manager, pf)
-      new NewHostConfigurationBuilder(manager, predicate)
-    }
-  }
+//  class NewInitialBranchConfigurationBuilder[A <: CrawlingManager](manager: A, predicate: URL => Boolean) {
+//    def set[B](option: Opt[A, B], value: B): NewHostConfigurationBuilder[A] = {
+//      val pf: PartialFunction[URL, B] = {case url if predicate.apply(url) => value}
+//      option.set(manager, pf)
+//      new NewHostConfigurationBuilder(manager, predicate)
+//    }
+//  }
 
-  class NewHostConfigurationBuilder[A <: CrawlingManager](manager: A, predicate: URL => Boolean) {
-    def set[B](option: Opt[A, B], value: B): NewHostConfigurationBuilder[A] = {
-      val pf: PartialFunction[URL, B] = {case url if predicate.apply(url) => value}
-      option.set(manager, pf)
-      this
-    }
-    def otherwise(): NewFinalBranchConfigurationBuilder[A] = {
-      new NewFinalBranchConfigurationBuilder(manager)
-    }
-  }
+//  class NewHostConfigurationBuilder[A <: CrawlingManager](manager: A, predicate: URL => Boolean) {
+//    def set[B](option: Opt[A, B], value: B): NewHostConfigurationBuilder[A] = {
+//      val pf: PartialFunction[URL, B] = {case url if predicate.apply(url) => value}
+//      option.set(manager, pf)
+//      this
+//    }
+//    def otherwise(): NewFinalBranchConfigurationBuilder[A] = {
+//      new NewFinalBranchConfigurationBuilder(manager)
+//    }
+//  }
 
-  class NewFinalBranchConfigurationBuilder[A <: CrawlingManager](manager: A) {
-    def set[B](option: Opt[A, B], value: B): NewFinalBranchConfigurationBuilder[A] = {
-      val pf: PartialFunction[URL, B] = {case _ if true => value}
-      option.set(manager, pf)
-      this
-    }
-    def read(data: mutable.Iterable[String]): InitialBranchBuilder = {
-      val q = new mutable.Queue[String]()
-      q ++= data
-      new InitialBranchBuilder(Context(manager, data.map(s => InputItem(s))))
-    }
-  }
+//  class NewFinalBranchConfigurationBuilder[A <: CrawlingManager](manager: A) {
+//    def set[B](option: Opt[A, B], value: B): NewFinalBranchConfigurationBuilder[A] = {
+//      val pf: PartialFunction[URL, B] = {case _ if true => value}
+//      option.set(manager, pf)
+//      this
+//    }
+//    def read(data: mutable.Iterable[String]): InitialBranchBuilder = {
+//      val q = new mutable.Queue[String]()
+//      q ++= data
+//      new InitialBranchBuilder(Context(manager, data.map(s => InputItem(s))))
+//    }
+//  }
 
 //    def withSettings[A <: ManagerBuilder]()(implicit managerBuilder: A): CrawlerBuilder[A] = {
 //      new CrawlerBuilder(managerBuilder)
@@ -387,8 +424,14 @@ object CrawlerApi {
 ////    def op
 //  }
 
-  class StarterBuilder(context: RichContext) {
-    def crawl(): Unit = {
+  class ExtractorBuilder[A](context: RichContext) {
+    def extract(): ForEachBuilder[A] = {
+      new ForEachBuilder[A](context)
+    }
+  }
+
+  class ForEachBuilder[A](context: RichContext) {
+    def forEach[A, B](fn: A => B): Unit = {
       context.queue.foreach{
         inItem =>
           inItem.onPickUp()

@@ -3,9 +3,12 @@ package izolotov.app
 import java.net.URL
 import java.net.http.HttpResponse
 
-import izolotov.crawler.CrawlerApi
+import izolotov.crawler.{CrawlerApi, CrawlerParameterBuilder, ExtractionManager, Manager}
 import izolotov.crawler.CrawlerApi.{Crawler, CrawlerBuilder, ParsingException}
 import org.jsoup.nodes.Document
+
+import scala.concurrent.{ExecutionContext, Future}
+import scala.util.{Failure, Success, Try}
 //import izolotov.crawler.DefaultCrawler.CrawlerExt
 
 import scala.collection.mutable
@@ -17,25 +20,68 @@ object App {
   def main(args: Array[String]): Unit = {
     import izolotov.crawler.DefaultCrawler._
     import izolotov.crawler.NewCrawler._
-    val fetcher = HttpFetcher().fetch(_)
+//    val fetcher = HttpFetcher().fetch(_)
+    val httpFetcher: Function[URL, HttpResponse[Document]] = HttpFetcher().fetch
+
+    CrawlerParameterBuilder
 
     case class Container(str: String)
     case class Container1(str: String)
 
+    def factory(conf: CrawlerParameterBuilder.Conf[Container]): Manager[Future[Container]] = {
+      new ExtractionManager[Container](conf)
+//      null
+    }
+    def foreachHandler(pr: Future[Container]):Unit = {
+      pr.onComplete{
+        case Success(pr) => println(pr)
+        case Failure(exc) => println(exc)
+      }(ExecutionContext.global)
+    }
+
     def write(pr :Product):Unit = println(pr)
-    def parseFail(pr: HttpResponse[Document]):Unit = {
+    def parseFail(pr: HttpResponse[Document]): Container = {
       throw new Exception("!")
     }
+    def parseSuccess(pr: HttpResponse[Document]): Container = {
+      Container(pr.body().title())
+    }
+    def printOut(container: Container): Unit = {
+      println(container)
+    }
+
 //    Crawler
 //      .withHostSettings()
 //      .when(a => a.isEmpty).option(Parallelism, 1)
     val f = Crawler
-      .richConfigure()
-      .setFetcher(fetcher).setParser(resp => Container(resp.body().title())).setWriter(write).set(RichDelay, 10L)
-      .when(host("www.buran.ru")).setParser(parseFail).setWriter(w => println(f"Buran:: ${w}"))
-      .when(host("example.com")).setWriter(w => println(f"Example:: ${w}")).set(RichDelay, 3000L)
-      .read(mutable.Seq("http://example.com/1", "http://example.com/2", "http://www.buran.ru/", "http://www.buran.ru/"))
-      .crawl()
+      .conf()
+      .default().set(
+        fetcher = httpFetcher,
+        parser = parseSuccess,
+        delay = 500L,
+        followRedirectPattern = host("example.com")
+      ).when(host("example1.com")).set(
+        fetcher = httpFetcher,
+        delay = 100L
+      )
+      .read(mutable.Seq("http://example.com", "http://example.com", "http://example.com"))
+      .extract()(factory)
+      .foreach(printOut)
+
+//      .foreach(foreachHandler)(factory)
+//    println(f.delay(new URL("http://example.com/1")))
+//    f.extractor.apply(new URL("http://example.com/1")).apply(new URL("http://example.com/1"))
+
+//      .richConfigure()
+//      .default.setFetcher(fetcher).setParser(resp => Container(resp.body().title())).setWriter(write).set(RichDelay, 10L)
+//      .when(host("www.buran.ru")).setParser(parseFail).setWriter(w => println(f"Buran:: ${w}"))
+//      .when(host("example.com")).setWriter(w => println(f"Example:: ${w}")).set(RichDelay, 3000L)
+//      .when(url("dummy1.com")).set(RichDelay, 100L)
+//      .when(url("dummy2.com")).setWriter(write)
+//      .read(mutable.Seq("http://example.com/1", "http://example.com/2", "http://www.buran.ru/", "http://www.buran.ru/"))
+//      .crawl()
+
+
       //.configure().set(NewDelay, 5000L).set(NewPrinter, false)
 //      .branchConfigure()
 //      .set(NewDelay, 1000L).set(NewPrinter, true)
