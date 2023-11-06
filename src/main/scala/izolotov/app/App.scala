@@ -3,7 +3,7 @@ package izolotov.app
 import java.net.URL
 import java.net.http.HttpResponse
 
-import izolotov.crawler.{CrawlerApi, CrawlerParameterBuilder, ExtractionManager, Manager}
+import izolotov.crawler.{CrawlerApi, CrawlerParameterBuilder, ExtractionManager, Extractor, Manager, PerHostExtractor}
 import izolotov.crawler.CrawlerApi.{Crawler, CrawlerBuilder, ParsingException}
 import org.jsoup.nodes.Document
 
@@ -28,9 +28,8 @@ object App {
     case class Container(str: String)
     case class Container1(str: String)
 
-    def factory(conf: CrawlerParameterBuilder.Conf[Container]): Manager[Future[Container]] = {
-      new ExtractionManager[Container](conf)
-//      null
+    def factory(conf: CrawlerParameterBuilder.Conf[Container]): Extractor[Container] = {
+      new PerHostExtractor[Container](conf)
     }
     def foreachHandler(pr: Future[Container]):Unit = {
       pr.onComplete{
@@ -47,26 +46,36 @@ object App {
       Container(pr.body().title())
     }
     def printOut(container: Container): Unit = {
-      println(container)
+      println("Out: " + container)
     }
 
-//    Crawler
-//      .withHostSettings()
-//      .when(a => a.isEmpty).option(Parallelism, 1)
     val f = Crawler
       .conf()
       .default().set(
         fetcher = httpFetcher,
         parser = parseSuccess,
-        delay = 500L,
-        followRedirectPattern = host("example.com")
+        delay = 1000L,
+        followRedirectPattern = host("example.com"),
+        parallelism = 2
       ).when(host("example1.com")).set(
         fetcher = httpFetcher,
         delay = 100L
       )
-      .read(mutable.Seq("http://example.com", "http://example.com", "http://example.com"))
+      .read(mutable.Seq(
+        "http://example.com",
+        /*"malformed",*/
+        "http://google.com",
+        "http://example.com",
+        "http://example.com",
+        "http://facebook.com",
+//        "http://example.com",
+//        "http://example.com",
+//        "http://example.com"
+      ))
       .extract()(factory)
       .foreach(printOut)
+
+//    Thread.sleep(5000)
 
 //      .foreach(foreachHandler)(factory)
 //    println(f.delay(new URL("http://example.com/1")))

@@ -1,6 +1,9 @@
 package izolotov.crawler
 
 import java.net.URL
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.locks.ReentrantLock
 
 import izolotov.crawler.CrawlerApi.{Direct, ForEachBuilder, Redirect, RichContext}
 import izolotov.crawler.CrawlerConf.DefaultBuilder
@@ -10,7 +13,7 @@ import izolotov.crawler.CrawlerParameterBuilder.Conf
 import scala.collection.mutable
 import scala.concurrent.{ExecutionContext, Future}
 import scala.reflect.ClassTag
-import scala.util.{Failure, Success}
+import scala.util.{Failure, Success, Try}
 
 object CrawlerParameterBuilder {
 
@@ -26,33 +29,90 @@ object CrawlerParameterBuilder {
   }
 
   class ExtractorBuilder[Doc](conf: Conf[Doc], urls: mutable.Iterable[String]) {
-    def extract()(implicit factory: Conf[Doc] => Manager[Future[Doc]]): ForeachBuilder1[Doc] = {
-
-      new ForeachBuilder1[Doc](factory.apply(conf).extract(urls.iterator))
+    def extract()(implicit factory: Conf[Doc] => Extractor[Doc]): ForeachBuilder1[Doc] = {
+      val extractor = factory.apply(conf)
+      val attempts = urls.iterator.map(urlStr => Try(new URL(urlStr)))
+        .map((t: Try[URL]) => t.map(extractor.extract))
+      new ForeachBuilder1[Doc](extractor, attempts)
     }
   }
 
-  class ForeachBuilder1[Doc](docs: Iterator[Future[Doc]]) {
-    def foreach[Out](fn: Doc => Out): Unit = {
-      docs.foreach(
-        f =>
-          f.onComplete{
-            case Success(doc) => fn.apply(doc)
-            case Failure(exc) => println(exc)
-          }(ExecutionContext.global)
+  class ForeachBuilder1[Doc](extractor: Extractor[Doc], attempts: Iterator[Try[Attempt[Doc]]]) {
+    def foreach[Out, Err](onSuccess: Doc => Out, onErr: Throwable => Err = (exc: Throwable) => throw exc): Unit = {
+      attempts.foreach(
+        t => {
+          t match {
+            case Success(a) => {
+              a.apply(onSuccess)
+            }
+            case Failure(e) => {
+              onErr.apply(e)
+            }
+          }
+        }
       )
+      extractor.close()
     }
   }
 
-  class ForeachBuilder[Doc](conf: Conf[Doc], urls: mutable.Iterable[String]) {
-    def foreach[A, Out](fn: A => Out)(implicit factory: Conf[Doc] => Manager[A]): Unit = {
-      val m: Manager[A] = factory.apply(conf)
-      val iter: Iterator[String] = urls.iterator
-      m.extract(iter).foreach(a => fn.apply(a))
-//      m.extract(iter).foreach(println)
-      null
+  class Counter() {
+    val lock = new ReentrantLock()
+    val condition = lock.newCondition()
+    val cnt = new AtomicInteger(0)
+
+    def increment(): Unit = {
+      cnt.incrementAndGet()
+    }
+
+    def decrement(): Unit = {
+      lock.lock();
+      try {
+        cnt.decrementAndGet()
+        condition.signal()
+      } finally {
+        lock.unlock();
+      }
+    }
+
+    def await(): Unit = {
+      lock.lock();
+      try {
+        while (cnt.get() != 0) {
+          condition.await()
+        }
+      } finally {
+        lock.unlock();
+      }
     }
   }
+
+//  class ExtractorBuilder2[Doc](conf: Conf[Doc], urls: mutable.Iterable[String]) {
+//    def extract()(implicit f: Conf[Doc] => Manager[Future[Doc]]): ForeachBuilder1[Doc] = {
+//      new ForeachBuilder1[Doc](factory.apply(conf).extract(urls.iterator))
+//    }
+//  }
+
+//  class ForeachBuilder2[Doc](docs: Iterator[Future[Doc]]) {
+//    def foreach[Out](fn: Doc => Out): Unit = {
+//      docs.foreach(
+//        f =>
+//          f.onComplete{
+//            case Success(doc) => fn.apply(doc)
+//            case Failure(exc) => println(exc)
+//          }(ExecutionContext.global)
+//      )
+//    }
+//  }
+
+//  class ForeachBuilder[Doc](conf: Conf[Doc], urls: mutable.Iterable[String]) {
+//    def foreach[A, Out](fn: A => Out)(implicit factory: Conf[Doc] => Manager[A]): Unit = {
+//      val m: Manager[A] = factory.apply(conf)
+//      val iter: Iterator[String] = urls.iterator
+//      m.extract(iter).foreach(a => fn.apply(a))
+////      m.extract(iter).foreach(println)
+//      null
+//    }
+//  }
 
   class Conf[Doc](val parallelism: Int,
                   var extractor: PartialFunction[URL, URL => Doc],
