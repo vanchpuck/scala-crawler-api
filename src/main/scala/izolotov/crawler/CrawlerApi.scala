@@ -42,7 +42,7 @@ object CrawlerApi {
 //  }
   case class Context(manager: CrawlingManager, queue: mutable.Iterable[Input])
 
-  case class RichContext(manager: RichManager, queue: mutable.Iterable[Input])
+//  case class RichContext(manager: RichManager, queue: mutable.Iterable[Input])
 
 //  trait ContextBuilder {
 //    def withManager(): CrawlingManager
@@ -96,6 +96,9 @@ object CrawlerApi {
 
 
 
+//  class Context() {
+//    def withExtractionConf[Doc](conf: CrawlerParameterBuilder.Conf[Doc])
+//  }
 
   object Crawler {
     def read[A <: ManagerBuilder](data: mutable.Iterable[String])(implicit managerBuilder: A): InitialBranchBuilder = {
@@ -424,29 +427,29 @@ object CrawlerApi {
 ////    def op
 //  }
 
-  class ExtractorBuilder[A](context: RichContext) {
-    def extract(): ForEachBuilder[A] = {
-      new ForEachBuilder[A](context)
-    }
-  }
-
-  class ForEachBuilder[A](context: RichContext) {
-    def forEach[A, B](fn: A => B): Unit = {
-      context.queue.foreach{
-        inItem =>
-          inItem.onPickUp()
-          try {
-            QueueItem(inItem, new URL(inItem.url), 0)
-//            val qItem = Try(QueueItem(inItem, new URL(inItem.url), 0)).recover(e => throw new URLParsingException(inItem.url, e)).get
-            val f = context.manager.manage(QueueItem(inItem, new URL(inItem.url), 0))
-          } catch {
-            case exc: CrawlingException => {
-              inItem.onFailure(exc)
-            }
-          }
-      }
-    }
-  }
+//  class ExtractorBuilder[A](context: RichContext) {
+//    def extract(): ForEachBuilder[A] = {
+//      new ForEachBuilder[A](context)
+//    }
+//  }
+//
+//  class ForEachBuilder[A](context: RichContext) {
+//    def forEach[A, B](fn: A => B): Unit = {
+//      context.queue.foreach{
+//        inItem =>
+//          inItem.onPickUp()
+//          try {
+//            QueueItem(inItem, new URL(inItem.url), 0)
+////            val qItem = Try(QueueItem(inItem, new URL(inItem.url), 0)).recover(e => throw new URLParsingException(inItem.url, e)).get
+//            val f = context.manager.manage(QueueItem(inItem, new URL(inItem.url), 0))
+//          } catch {
+//            case exc: CrawlingException => {
+//              inItem.onFailure(exc)
+//            }
+//          }
+//      }
+//    }
+//  }
   class RichStarterBuilder(f: Function[String, Unit], data: mutable.Iterable[String]) {
     def crawl(): Unit = {
       data.foreach(item => f.apply(item))

@@ -1,11 +1,12 @@
 package izolotov.crawler
 
+import java.io.{BufferedReader, FileReader}
 import java.net.URL
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.locks.ReentrantLock
 
-import izolotov.crawler.CrawlerApi.{Direct, ForEachBuilder, Redirect, RichContext}
+//import izolotov.crawler.CrawlerApi.{Direct, ForEachBuilder, Redirect, RichContext}
 import izolotov.crawler.CrawlerConf.DefaultBuilder
 import izolotov.crawler.CrawlerInput.InputItem
 import izolotov.crawler.CrawlerParameterBuilder.Conf
@@ -39,6 +40,10 @@ object CrawlerParameterBuilder {
 
   class ForeachBuilder1[Doc](extractor: Extractor[Doc], attempts: Iterator[Try[Attempt[Doc]]]) {
     def foreach[Out, Err](onSuccess: Doc => Out, onErr: Throwable => Err = (exc: Throwable) => throw exc): Unit = {
+      attempts.foreach(t => t.map(a => a(onSuccess)).recover({case e if true => onErr(e)}).get)
+      extractor.close()
+    }
+    def foreach1[Out, Err](onSuccess: Doc => Out, onErr: Throwable => Err = (exc: Throwable) => throw exc): Unit = {
       attempts.foreach(
         t => {
           t match {
@@ -46,7 +51,12 @@ object CrawlerParameterBuilder {
               a.apply(onSuccess)
             }
             case Failure(e) => {
-              onErr.apply(e)
+              throw e
+//              try {
+//                onErr.apply(e)
+//              } catch {
+//                case ex: Exception => throw ex
+//              }
             }
           }
         }
@@ -134,9 +144,12 @@ object CrawlerParameterBuilder {
     }
   }
 
-  case class DefaultConf[DefRaw, DefDoc](fetcher: URL => DefRaw,
-                                         parser: DefRaw => DefDoc,
-                                         delay: Long = 0L)
+  case class DefaultConf[DefRaw, DefDoc](
+                                          fetcher: URL => DefRaw,
+                                          parser: DefRaw => DefDoc,
+                                          delay: Long = 0L,
+                                          redirectPattern: URL => Boolean
+                                        )
 
   class ConfBuilder() {
     def default(): DefaultBuilder = {
@@ -146,28 +159,29 @@ object CrawlerParameterBuilder {
 
   class DefaultBuilder() {
     def set[Raw, Doc](
-                             fetcher: URL => Raw,
-                             parser: Raw => Doc,
-//                             writer: Doc => Unit,
-                             parallelism: Int = 10,
-                             delay: Long = 0L,
-                             followRedirectPattern: URL => Boolean
-                           ): Branch[Raw, Doc] = {
+                       fetcher: URL => Raw,
+                       parser: Raw => Doc,
+                       parallelism: Int = 10,
+                       delay: Long = 0L,
+                       redirectPattern: URL => Boolean = _ => true
+                     ): Branch[Raw, Doc] = {
       val conf = new Conf(
         parallelism,
         {case _ if true => fetcher.andThen(parser)},
         {case _ if true => delay},
-        {case _ if true => followRedirectPattern},
+        {case _ if true => redirectPattern},
       )
-      new Branch[Raw, Doc](conf, DefaultConf(fetcher, parser, delay))
+      new Branch[Raw, Doc](conf, DefaultConf(fetcher, parser, delay, redirectPattern))
     }
   }
 
   class BranchBuilder[Raw, Doc](conf: Conf[Doc], default: DefaultConf[Raw, Doc], predicate: URL => Boolean) {
-    def set(fetcher: URL => Raw = default.fetcher,
-            parser: Raw => Doc = default.parser,
-//            writer: Doc => Unit = default.writer,
-            delay: Long = 0L): Branch[Raw, Doc] = {
+    def set(
+             fetcher: URL => Raw = default.fetcher,
+             parser: Raw => Doc = default.parser,
+             delay: Long = 0L,
+             redirectPattern: URL => Boolean = _ => true
+           ): Branch[Raw, Doc] = {
       val pf: PartialFunction[URL, URL => Doc] = {
         case url if predicate(url) => fetcher.andThen(parser)
       }

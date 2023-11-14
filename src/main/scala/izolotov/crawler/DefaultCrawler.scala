@@ -166,10 +166,14 @@ object DefaultCrawler {
   class HttpFetcher[T](bodyHandler: HttpResponse.BodyHandler[T]) {
     def fetch(url: URL)(implicit client: HttpClient): HttpResponse[T] = {
       println(f"Fetch: ${url}")
+//      if (url.getHost == "google.com") {
+//        throw new Exception("!!!!!!!!!!!!!!")
+//      }
       val request = HttpRequest.newBuilder()
         .uri(url.toURI)
         .build()
       val resp = client.send(request, bodyHandler /*BaseHttpFetcher.CustomBodyHandler*/)
+//      println(resp)
       resp
     }
   }

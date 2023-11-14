@@ -27,8 +27,6 @@ class FixedDelayModerator(delay: Long) {
     }
   }
 
-  private implicit val processingContext = ExecutionContext.fromExecutor(Executors.newFixedThreadPool(1))
-
   def apply[A, R](url: A, fn: A => R): R = {
     fetcherLock.lock()
     try {
