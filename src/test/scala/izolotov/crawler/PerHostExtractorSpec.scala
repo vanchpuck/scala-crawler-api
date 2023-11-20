@@ -1,18 +1,18 @@
 package izolotov.crawler
 
 import java.net.URL
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.{CopyOnWriteArrayList, Executors, RejectedExecutionException, TimeUnit}
 
 import collection.mutable.{ArrayBuffer, Buffer, Seq}
 import org.scalatest.flatspec.AnyFlatSpec
 import PerHostExtractorSpec._
 import izolotov.crawler
-import izolotov.crawler.PerHostExtractor.{HostQueueIsFullException, SharedQueueIsFullException}
+import izolotov.crawler.PerHostExtractor.{ExtractionManager, HostQueueIsFullException, SharedQueueIsFullException}
 
 import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, ExecutionContext, Future}
 import scala.util.Using
-
 import scala.jdk.CollectionConverters._
 
 object PerHostExtractorSpec {
@@ -61,7 +61,7 @@ class PerHostExtractorSpec extends AnyFlatSpec {
 
   implicit val ec = ExecutionContext.global
 
-  behavior of "a queue"
+  behavior of "queue"
 
   it should "should extract all targets" in {
     val delay = 30L
@@ -93,12 +93,12 @@ class PerHostExtractorSpec extends AnyFlatSpec {
     queue.close()
   }
 
-  behavior of "an extraction manager"
+  behavior of "per host extractor"
 
   it should "extract all targets in parallel grouped by host" in {
     val breakMillis = 100L
     val server = new ServerMock(breakMillis)
-    val manager = new PerHostExtractor[Unit](2, { case _ if true => server.call})
+    val manager = new ExtractionManager[Unit](2, { case _ if true => server.call})
 
     val startMillis = System.currentTimeMillis()
     val future = Future.sequence(Seq(
@@ -118,7 +118,7 @@ class PerHostExtractorSpec extends AnyFlatSpec {
   it should "keep a delay for a host" in {
     val delay = 20L
     val server = new ServerMock(5L)
-    val manager = new PerHostExtractor[Unit](1, { case _ if true => server.call})
+    val manager = new ExtractionManager[Unit](1, { case _ if true => server.call})
     val future = Future.sequence(Seq(
       manager.extract(ExampleCom),
       manager.extract(ExampleNet),
@@ -135,7 +135,7 @@ class PerHostExtractorSpec extends AnyFlatSpec {
   it should "throw exception when the shared queue is full" in {
     // 1st call will be handled, 2nd and 3rd will be queued, the last one will raise an Exception
     val server = new ServerMock(30L)
-    val manager = new PerHostExtractor[Unit](1, { case _ if true => server.call}, processingQueueCapacity = 2)
+    val manager = new ExtractionManager[Unit](1, { case _ if true => server.call}, processingQueueCapacity = 2)
     val futures = Future.sequence(Seq(
       manager.extract(ExampleCom),
       manager.extract(ExampleNet),
@@ -149,7 +149,7 @@ class PerHostExtractorSpec extends AnyFlatSpec {
   it should "throw exception when the host queue is full" in {
     // 1st call will be handled, 2nd and 3rd will be queued, the last one will raise an Exception
     val server = new ServerMock(30L)
-    val manager = new PerHostExtractor[Unit](3, { case _ if true => server.call}, hostQueueCapacity = 1)
+    val manager = new ExtractionManager[Unit](3, { case _ if true => server.call}, hostQueueCapacity = 1)
     // 1st call will be handled, 2nd will be queued, the last one will raise an Exception
     val futures = Future.sequence(Seq.fill(3)(manager.extract(ExampleCom)))
     assertThrows[HostQueueIsFullException](Await.result(futures, Duration.apply(TIMEOUT_SECONDS, TimeUnit.SECONDS)))
@@ -159,11 +159,24 @@ class PerHostExtractorSpec extends AnyFlatSpec {
   it should "not throw exception when the parallelism level set prevents a queue to be overfilled" in {
     // 1st call will be handled, 2nd and 3rd will be queued, the last one will raise an Exception
     val server = new ServerMock(30L)
-    val manager = new PerHostExtractor[Unit](1, { case _ if true => server.call}, hostQueueCapacity = 1)
+    val manager = new ExtractionManager[Unit](1, { case _ if true => server.call}, hostQueueCapacity = 1)
     // 1st call will be handled, 2nd will be queued, the last one will not be picked while one of the previous don't complete
     val futures = Future.sequence(Seq.fill(3)(manager.extract(ExampleCom)))
     Await.result(futures, Duration.apply(TIMEOUT_SECONDS, TimeUnit.SECONDS))
     manager.close()
+  }
+
+  behavior of "per host extractor"
+
+  it should "handle all the input before closing" in {
+    val server = new ServerMock(1000L)
+    val extractor = new PerHostExtractor[Unit](1, { case _ if true => server.call})
+    val counter = new AtomicInteger(0)
+    val inCount = 5
+    Seq.fill(inCount)(extractor.extract(ExampleCom).apply(_ => counter.incrementAndGet()))
+    extractor.close()
+    assert(inCount == counter.get())
+    assert(server.requests.size() == inCount)
   }
 
 }
