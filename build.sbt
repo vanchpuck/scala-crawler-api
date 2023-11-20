@@ -8,3 +8,5 @@ scalaVersion := "2.13.10"
 libraryDependencies += "com.google.guava" % "guava" % "31.1-jre"
 // https://mvnrepository.com/artifact/org.jsoup/jsoup
 libraryDependencies += "org.jsoup" % "jsoup" % "1.15.3"
+// https://mvnrepository.com/artifact/org.scalatest/scalatest
+libraryDependencies += "org.scalatest" %% "scalatest" % "3.2.17" % Test
