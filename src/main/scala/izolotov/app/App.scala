@@ -3,7 +3,7 @@ package izolotov.app
 import java.net.URL
 import java.net.http.HttpResponse
 
-import izolotov.crawler.{CrawlerApi, CrawlerParameterBuilder, Extractor, Manager, PerHostExtractorLegacy}
+import izolotov.crawler.{CrawlerApi, CrawlerParameterBuilder, Extractor, Manager, PerHostExtractor, PerHostExtractorLegacy}
 import izolotov.crawler.CrawlerApi.{Crawler, CrawlerBuilder, ParsingException}
 import org.jsoup.nodes.Document
 
@@ -26,13 +26,11 @@ object App {
     case class Container1(str: String)
 
     def factory(conf: CrawlerParameterBuilder.Conf[Container]): Extractor[Container] = {
-      new PerHostExtractorLegacy[Container](conf)
-    }
-    def foreachHandler(pr: Future[Container]):Unit = {
-      pr.onComplete{
-        case Success(pr) => println(pr)
-        case Failure(exc) => println(exc)
-      }(ExecutionContext.global)
+      new PerHostExtractor[Container](
+        conf.parallelism,
+        conf.extractor,
+        conf.delay
+      )
     }
 
     def parseSuccess(pr: HttpResponse[Document]): Container = {
@@ -49,10 +47,10 @@ object App {
         parser = parseSuccess,
         delay = 10000L,
         redirectPattern = host("example.com"),
-        parallelism = 1
+        parallelism = 9
       ).when(host("facebook.com")).set(
         fetcher = httpFetcher,
-//        delay = 50L,
+        delay = 10000L,
       )
       .read(mutable.Seq(
         "http://facebook.com",

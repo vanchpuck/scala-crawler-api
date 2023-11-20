@@ -20,7 +20,7 @@ object PerHostExtractor {
   val DefaultCapacity = 20
   val DefaultDelay = 0L
 
-  val DaemonThreadFactory = new ThreadFactoryBuilder().setDaemon(false).build
+  val DaemonThreadFactory = new ThreadFactoryBuilder().setDaemon(true).build
 
   class HostQueueIsFullException(cause: String) extends RejectedExecutionException
 
@@ -43,7 +43,6 @@ object PerHostExtractor {
 
     def extract[Doc](url: URL, f: URL => Doc): Future[Doc] = {
       Future {
-        println("Extracting " + url)
         moderator.apply(url, f)
       }(ec)
     }

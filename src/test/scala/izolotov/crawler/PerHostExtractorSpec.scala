@@ -10,6 +10,7 @@ import PerHostExtractorSpec._
 import izolotov.crawler
 import izolotov.crawler.PerHostExtractor.{ExtractionManager, HostQueueIsFullException, SharedQueueIsFullException}
 
+import scala.collection.mutable
 import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, ExecutionContext, Future}
 import scala.util.Using
@@ -169,7 +170,7 @@ class PerHostExtractorSpec extends AnyFlatSpec {
   behavior of "per host extractor"
 
   it should "handle all the input before closing" in {
-    val server = new ServerMock(1000L)
+    val server = new ServerMock()
     val extractor = new PerHostExtractor[Unit](1, { case _ if true => server.call})
     val counter = new AtomicInteger(0)
     val inCount = 5
@@ -177,6 +178,21 @@ class PerHostExtractorSpec extends AnyFlatSpec {
     extractor.close()
     assert(inCount == counter.get())
     assert(server.requests.size() == inCount)
+  }
+
+  it should "handle exceptions smoothly" in {
+    val server = new ServerMock()
+    val successCall: PartialFunction[URL, URL => Unit] = {case url if url.toString == ExampleCom.toString => server.call}
+    val errCall: PartialFunction[URL, URL => Unit] = {case _ if true => throw new Exception()}
+    val extractFn: PartialFunction[URL, URL => Unit] = successCall.orElse(errCall)
+    val extractor = new PerHostExtractor[Unit](2, extractFn)
+    val successCounter = new AtomicInteger(0)
+    val errCounter = new AtomicInteger(0)
+    Seq(ExampleCom, ExampleNet, ExampleCom, ExampleNet)
+      .foreach(url => extractor.extract(url).apply(_ => successCounter.incrementAndGet(), _ => errCounter.incrementAndGet()))
+    extractor.close()
+    assert(2 == errCounter.get())
+    assert(2 == successCounter.get())
   }
 
 }

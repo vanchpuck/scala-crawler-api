@@ -51,12 +51,12 @@ object CrawlerParameterBuilder {
               a.apply(onSuccess)
             }
             case Failure(e) => {
-              throw e
-//              try {
-//                onErr.apply(e)
-//              } catch {
-//                case ex: Exception => throw ex
-//              }
+//              throw e
+              try {
+                onErr.apply(e)
+              } catch {
+                case ex: Exception => throw ex
+              }
             }
           }
         }
