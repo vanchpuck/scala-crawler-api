@@ -5,7 +5,7 @@ import java.util.concurrent.locks.ReentrantLock
 import java.util.concurrent.{Executors, LinkedBlockingDeque, RejectedExecutionException, ThreadPoolExecutor, TimeUnit}
 
 import com.google.common.util.concurrent.ThreadFactoryBuilder
-import izolotov.FixedDelayModerator
+import izolotov.{DelayedApplier, FixedDelayModerator}
 import izolotov.crawler.PerHostExtractorLegacy.HostQueue
 import javax.print.Doc
 
@@ -24,88 +24,39 @@ object PerHostExtractor {
 
   class HostQueueIsFullException(cause: String) extends RejectedExecutionException
 
-  class SharedQueueIsFullException(cause: String) extends RejectedExecutionException
+  class ProcessingQueueIsFullException(cause: String) extends RejectedExecutionException
 
-  case class Queue(moderator: FixedDelayModerator, ec: ExecutionContextExecutorService)
+//  case class Queue(moderator: FixedDelayModerator, ec: ExecutionContextExecutorService)
 
-//  class Queue(delay: Long, length: Int = Int.MaxValue) extends AutoCloseable {
-//    val moderator = new FixedDelayModerator(delay)
-//
-//    val ec = ExecutionContext.fromExecutorService(new ThreadPoolExecutor(
-//      1,
-//      1,
-//      0L,
-//      TimeUnit.MILLISECONDS,
-//      new LinkedBlockingDeque[Runnable](length),
-//      DaemonThreadFactory,
-//      (r: Runnable, e: ThreadPoolExecutor) => {
-//        throw new HostQueueIsFullException(s"Task ${r.toString()} rejected from ${e.toString()}")
-//      }
-//    ))
-//
-//    def extract[Doc](url: URL, f: URL => Doc): Future[Doc] = {
-//      Future {
-//        moderator.apply(url, f)
-//      }(ec)
-//    }
-//
-//    def close(): Unit = {
-//      ec.shutdown
-//      try
-//        if (!ec.awaitTermination(2, TimeUnit.SECONDS)) {
-//          ec.shutdownNow
-//        }
-//      catch {
-//        case ie: InterruptedException =>
-//          ec.shutdownNow
-//          Thread.currentThread.interrupt()
-//      }
-//    }
-//  }
+  class Queue[Doc](capacity: Int = Int.MaxValue)(implicit globalEC: ExecutionContext) extends AutoCloseable {
 
-  class ExtractionManager[Doc](
-                                parallelism: Int,
-                                extract: PartialFunction[URL, URL => Doc],
-                                delay: PartialFunction[URL, Long] = {case _ if true => DefaultDelay},
-                                processingQueueCapacity: Int = DefaultCapacity,
-                                hostQueueCapacity: Int = DefaultCapacity
-                              ) extends AutoCloseable {
-    val hostMap = collection.mutable.Map[String, Queue]()
-
-    val ec = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(parallelism))
-
-    def extract(url: URL): Future[Doc] = {
-//      delay.andThen()
-      val queue = hostMap.getOrElseUpdate(url.getHost, Queue(new FixedDelayModerator(delay.apply(url)), newExecutionContext()))
-      Future {
-        val f = Future {
-          queue.moderator.apply(url, extract(url))
-        }(ec)
-        // TODO add timeout parameter along with delay
-        Await.result(f, Duration.Inf)
-      }(queue.ec)
-//      Future {
-//        val f = queue.extract(url, extract(url))
-//        Await.result(f, Duration.Inf)
-//      }(ec)
-    }
-
-    def close(): Unit = {
-      shutdown(ec)
-      Try(hostMap.foreach(entry => shutdown(entry._2.ec))).recover{case _ => println("Can't close a host queue")}
-    }
-
-    private def newExecutionContext(): ExecutionContextExecutorService = ExecutionContext.fromExecutorService(new ThreadPoolExecutor(
+    private val localEC = ExecutionContext.fromExecutorService(new ThreadPoolExecutor(
       1,
       1,
       0L,
       TimeUnit.MILLISECONDS,
-      new LinkedBlockingDeque[Runnable](hostQueueCapacity),
+      new LinkedBlockingDeque[Runnable](capacity),
       DaemonThreadFactory,
       (r: Runnable, e: ThreadPoolExecutor) => {
         throw new HostQueueIsFullException(s"Task ${r.toString()} rejected from ${e.toString()}")
       }
     ))
+
+    private val applier = new DelayedApplier[URL, Doc]
+
+    def extract(url: URL, extract: URL => Doc, delay: Long): Future[Doc] = {
+      Future {
+        val f = Future {
+          applier.apply(url, extract, delay)
+        }(globalEC)
+        // TODO add timeout parameter along with delay
+        Await.result(f, Duration.Inf)
+      }(localEC)
+    }
+
+    def close(): Unit = {
+      shutdown(localEC)
+    }
   }
 
   class RegisteredAttempt[Doc](future: Future[Doc], deregister: () => Unit) extends Attempt[Doc] {
@@ -131,30 +82,38 @@ object PerHostExtractor {
       }
     }
   }
-
 }
 
 class PerHostExtractor[Doc](
-                               parallelism: Int,
-                               extract: PartialFunction[URL, URL => Doc],
-                               delay: PartialFunction[URL, Long] = {case _ if true => DefaultDelay},
-                               processingQueueCapacity: Int = DefaultCapacity,
-                               hostQueueCapacity: Int = DefaultCapacity
-                             ) extends AutoCloseable with Extractor[Doc] {
+                              parallelism: Int,
+                              extract: PartialFunction[URL, URL => Doc],
+                              delay: PartialFunction[URL, Long],
+                              processingQueueCapacity: Int = DefaultCapacity,
+                              hostQueueCapacity: Int = DefaultCapacity
+                            ) extends AutoCloseable with Extractor[Doc] {
+  val hostMap = collection.mutable.Map[String, Queue[Doc]]()
+
+  implicit val ec = ExecutionContext.fromExecutorService(new ThreadPoolExecutor(
+    parallelism,
+    parallelism,
+    0L,
+    TimeUnit.MILLISECONDS,
+    new LinkedBlockingDeque[Runnable](processingQueueCapacity),
+    DaemonThreadFactory,
+    (r: Runnable, e: ThreadPoolExecutor) => {
+      // TODO block instead of throw an exception
+      throw new ProcessingQueueIsFullException(s"Task ${r.toString()} rejected from ${e.toString()}")
+    }
+  ))
+
   var counter: Int = 0
   val lock = new ReentrantLock()
   val condition = lock.newCondition()
-  val extractionManager = new ExtractionManager[Doc](
-    parallelism,
-    extract,
-    delay,
-    processingQueueCapacity,
-    hostQueueCapacity
-  )
 
-  override def extract(url: URL): Attempt[Doc] = {
+  def extract(url: URL): RegisteredAttempt[Doc] = {
+    val queue = hostMap.getOrElseUpdate(url.getHost, new Queue(hostQueueCapacity))
     try
-      new RegisteredAttempt(extractionManager.extract(url), deregisterAttempt)
+      new RegisteredAttempt(queue.extract(url, extract(url), delay(url)), deregisterAttempt)
     finally
       registerAttempt()
   }
@@ -183,7 +142,8 @@ class PerHostExtractor[Doc](
         condition.await()
       }
     } finally {
-      extractionManager.close()
+      shutdown(ec)
+      //        Try(hostMap.foreach(entry => shutdown(entry._2.ec))).recover{case _ => println("Can't close a host queue")}
       lock.unlock()
     }
   }

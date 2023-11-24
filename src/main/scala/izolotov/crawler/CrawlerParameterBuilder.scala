@@ -193,27 +193,6 @@ object CrawlerParameterBuilder {
       new Branch[Raw, Doc](conf, default)
     }
 
-
-//    def set[X: ClassTag](delay: Long = default.delay): Branch[DefRaw, DefDoc] = {
-//      this.setDef(default.fetcher, default.parser, default.writer, delay)
-//    }
-
-    private def setDef(fetcher: URL => Raw,
-                                 parser: Raw => Doc,
-                                 writer: Doc => Unit,
-                                 delay: Long = default.delay): Branch[Raw, Doc] = {
-      val pf: PartialFunction[URL, URL => Doc] = {
-        case url if predicate(url) => fetcher.andThen(parser)
-      }
-      val pfDelay: PartialFunction[URL, Long] = {
-        case url if predicate(url) => delay
-      }
-      conf.extractor(pf)
-//      Some(delay).map(value => {case url if predicate(url) => value})
-      conf.delay(pfDelay)
-      new Branch[Raw, Doc](conf, default)
-    }
-    //    def set[Raw, Doc](fetcher: URL => Raw, parser: Raw => Doc, writer: Doc => Unit)
   }
 
 //  case class Branch2[DefRaw, DefDoc](conf: Conf, default: DefaultConf[DefRaw, DefDoc]) extends Branch[DefRaw, DefDoc]
