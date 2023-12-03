@@ -110,12 +110,20 @@ class PerHostExtractor[Doc](
   val lock = new ReentrantLock()
   val condition = lock.newCondition()
 
-  def extract(url: URL): RegisteredAttempt[Doc] = {
+//  def extract(url: URL): RegisteredAttempt[Doc] = {
+//    val queue = hostMap.getOrElseUpdate(url.getHost, new Queue(hostQueueCapacity))
+//    try
+//      new RegisteredAttempt(queue.extract(url, extract(url), delay(url)), deregisterAttempt)
+//    finally
+//      registerAttempt()
+//  }
+  def extract(url: URL): Future[Doc] = {
     val queue = hostMap.getOrElseUpdate(url.getHost, new Queue(hostQueueCapacity))
-    try
-      new RegisteredAttempt(queue.extract(url, extract(url), delay(url)), deregisterAttempt)
-    finally
-      registerAttempt()
+    queue.extract(url, extract(url), delay(url))
+//    try
+//      new RegisteredAttempt(queue.extract(url, extract(url), delay(url)), deregisterAttempt)
+//    finally
+//      registerAttempt()
   }
 
   def registerAttempt(): Unit = {

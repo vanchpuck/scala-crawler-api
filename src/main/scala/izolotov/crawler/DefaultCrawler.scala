@@ -238,7 +238,9 @@ object DefaultCrawler {
     }
   }
 
-  implicit def host(host: String): URL => Boolean = url => url.getHost == host
+  implicit def host(url: String): URL => Boolean = url => url.getHost == url
+
+  implicit def all(): URL => Boolean = _ => true
 
   implicit def url(url: String): URL => Boolean = urlObj => urlObj.toString == url
 
