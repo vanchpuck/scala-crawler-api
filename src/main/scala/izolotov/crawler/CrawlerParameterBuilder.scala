@@ -58,46 +58,18 @@ object CrawlerParameterBuilder {
 //  class ForeachBuilder1[Doc](extractor: Extractor[Doc], attempts: Iterator[Try[Attempt[Doc]]]) {
   class ForeachBuilder1[Doc](extractor: Extractor[Doc], urls: CrawlingQueue) {
     def foreach[Out, Err](onSuccess: Doc => Out, onErr: Throwable => Err = (exc: Throwable) => throw exc): Unit = {
-//      val iter = urls.map(url => extractor.extract(new URL(url)))
-//        .map(f => f.map(onSuccess)(ExecutionContext.global))
-//        .foreach(a => a(onSuccess))
       implicit val ec = ExecutionContext.global
-//      def f: String => URL = null
       val strToUrl: String => URL = str => new URL(str)
-//      strToUrl.andThen(extractor.extract).andThen(f => f.map(doc => onSuccess(doc)))
-      val processUrlStr = strToUrl
-        .andThen(extractor.extract)
-//        .andThen(f => f.map(doc => onSuccess(doc)))
-//        .andThen(t => t.)
-
-//          .andThen()
-//        .andThen(f => f.recover({case e if true => onErr(e)}).get)
-//      val a = f.apply("http://example.com")
-//      println(a)
       val futures = urls
         .map(item => item.markAsInProgress())
         .map{item =>
-          val future = item.apply(processUrlStr)
+          val future = item.apply(strToUrl.andThen(extractor.extract))
           future.onComplete{t =>
             t.map(onSuccess).recover({case e if true => onErr(e)})
             item.markAsProcessed()
           }
-//          future.onComplete{
-//            case Success(a) => onSuccess(a)
-//            case Failure(exc) => onErr(exc)
-//          }
-//          item.markAsProcessed()
           future
         }
-
-//      f.andThen(extractor.extract).andThen(f => f.map(onSuccess).recover({case e if true => onErr(e)}))
-//      urls.map(item => Try(new URL(item.url())))
-//        .map((t: Try[URL]) => t.map(extractor.extract))
-//        .foreach(t => t.map(f => f.map(onSuccess)).recover({case e if true => onErr(e)}).get)
-//      attempts.foreach(t => t.get.apply(onSuccess, onErr))
-//      Future.traverse()
-//        .recover({case e if true => onErr(e)}).get
-
       Await.result(Future.sequence(futures), Duration.Inf)
       extractor.close()
     }
@@ -219,7 +191,6 @@ object CrawlerParameterBuilder {
                        redirectPattern: URL => Boolean = _ => true,
                        outLinkPattern: URL => Boolean = _ => true
                      )(implicit redirectExtractor: Raw => Option[URL], outLinkExtractor: Raw => Iterable[URL]): Branch[Raw, Doc] = {
-      val strToUrl: String => URL = str => new URL(str)
       val conf = new Conf(
         parallelism,
         {case _ if true =>
@@ -239,7 +210,7 @@ object CrawlerParameterBuilder {
     def set(
              fetcher: URL => Raw = default.fetcher,
              parser: Raw => Doc = default.parser,
-             delay: Long = 0L,
+             delay: Long = default.delay,
              redirectPattern: URL => Boolean = _ => true
            )(implicit redirectExtractor: Raw => Option[URL]): Branch[Raw, Doc] = {
       val pf: PartialFunction[URL, URL => Doc] = {
