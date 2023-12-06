@@ -157,7 +157,7 @@ object CrawlerParameterBuilder {
     }
 
     def process(url: URL): Unit = {
-      queue.add(url.toString)
+      queue.add(url.toString, 0)
 //      val applied = extractor.apply(raw)
 //      if (applied.isDefined) {
 //        queue.add(applied.get.toString)
