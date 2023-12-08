@@ -5,7 +5,10 @@ import java.net.http.HttpResponse
 
 import izolotov.CrawlingQueue
 import izolotov.CrawlingQueue.Item
-import izolotov.crawler.SuperNewCrawlerApi.{BranchConfigurationBuilder}
+import izolotov.crawler.SuperNewCrawlerApi.BranchConfigurationBuilder
+
+import scala.concurrent.duration.Duration
+import scala.concurrent.{Await, ExecutionContext, Future}
 //import izolotov.crawler.NewCrawlerApi.Configuration
 import org.jsoup.nodes.Document
 
@@ -66,7 +69,7 @@ object SuperNewCrawlerApi {
   class ExtractionBuilder(urls: CrawlingQueue) {
     def extract[Raw, Doc](fetcher: URL => Raw, parser: Raw => Doc)(implicit redirect: Raw => Option[URL]): BranchPredicateBuilder[Raw, Doc] = {
       new BranchPredicateBuilder[Raw, Doc](
-        urls, new ConfBuilder[Raw, Doc](GlobalConf(10, redirect), UrlConf(fetcher, parser, 0L, _ => true, 0))
+        urls, new ConfBuilder[Raw, Doc](GlobalConf(10, redirect), UrlConf(fetcher, parser, 0L, _ => true, 1))
       )
     }
   }
@@ -77,21 +80,30 @@ object SuperNewCrawlerApi {
 //                                          fn: PartialFunction[URL, Configuration[Raw, Doc]],
 //                                          default: Configuration[Raw, Doc]
                                         ) {
-    def foreach[Out](fn: Doc => Out): Unit = {
-      urls.foreach { item =>
-        val url = new URL(item.url())
-        val conf = builder.getConf(url)
-//        val fetcher: URL => Raw = builder.fetcher.applyOrElse(url, default.fetcher)
-//        val parser: Raw => Doc = builder.parser.applyOrElse(url, default.parser)
-//        val delay: Long = builder.delay.applyOrElse(url, _ => default.delay)
-//        val redirectPattern: URL => Boolean = builder.redirectPattern.applyOrElse(url, default.redirectPattern)
-//        val redirectDepth: Int = builder.redirectDepth.applyOrElse(url, _ => default.redirectDepth)
-        conf.fetcher.andThen{raw =>
-          println(conf.delay)
-          if (item.depth() < conf.redirectDepth) builder.global.redirect.apply(raw).map(target => urls.add(target.toString, item.depth()))
-          conf.parser(raw)
-        }.andThen(fn).apply(new URL(item.url()))
+    def foreach[Out, Err](onSuccess: Doc => Out, onErr: Throwable => Err = (exc: Throwable) => throw exc): Unit = {
+      implicit val ec = ExecutionContext.global
+      val extractor = new NewPerHostExtractor(builder.global.parallelism,10,10)
+      val futures = urls.map{
+        item =>
+          println(item)
+          item.markAsInProgress()
+          val url = new URL(item.url())
+          val conf = builder.getConf(url)
+          val fnExtract = conf.fetcher.andThen {
+            raw =>
+              println(conf.delay)
+              if (item.depth() < conf.redirectDepth) builder.global.redirect.apply(raw).map(target => urls.add(target.toString, item.depth()))
+              conf.parser(raw)
+          }
+          val future = extractor.extract(url, fnExtract, conf.delay)
+          future.onComplete{t =>
+            t.map(onSuccess).recover({case e if true => onErr(e)})
+            item.markAsProcessed()
+          }
+          future
       }
+      Await.result(Future.sequence(futures), Duration.Inf)
+      extractor.close()
     }
     def when(predicate: URL => Boolean): BranchConfigurationBuilder[Raw, Doc] = {
       new BranchConfigurationBuilder[Raw, Doc](urls, builder, predicate)
@@ -135,9 +147,9 @@ object SuperNewCrawlerApi {
 
   def main(args: Array[String]): Unit = {
     NewCrawler
-      .read(new CrawlingQueue(Seq("http://example.com", "http://example.net")))
+      .read(new CrawlingQueue(Seq("http://example.com", "http://example.com", "http://example.com", "http://example.net")))
       .extract(fetcher = httpFetcher, parser = defaultParser)
-      .when(url("http://example.com")).set(delay = 100L, redirectDepth = 1, parser = anotherParser)
+      .when(url("http://example.com")).set(delay = 2000L, redirectDepth = 0, parser = anotherParser)
       .foreach(println)
   }
 

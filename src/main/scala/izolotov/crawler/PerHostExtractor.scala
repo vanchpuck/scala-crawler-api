@@ -42,7 +42,7 @@ object PerHostExtractor {
       }
     ))
 
-    private val applier = new DelayedApplier[URL, Doc]
+    private val applier = new DelayedApplier
 
     def extract(url: URL, extract: URL => Doc, delay: Long): Future[Doc] = {
       Future {
