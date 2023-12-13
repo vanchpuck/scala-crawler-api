@@ -63,6 +63,8 @@ object SuperNewPerHostExtractor {
   }
 
   case class RobotsRules(delay: Option[Long])
+
+  def getRobotsTxtURL: URL => URL = url => new URL(s"${url.getProtocol}://${url.getHost}/robots.txt")
 }
 
 class SuperNewPerHostExtractor[Raw, Doc](conf: Configuration[Raw, Doc]) {
@@ -85,30 +87,13 @@ class SuperNewPerHostExtractor[Raw, Doc](conf: Configuration[Raw, Doc]) {
 
 //  val hostMap = collection.mutable.Map[String, Queue[Doc]]()
   val hostRobotsRules = collection.mutable.Map[String, RobotsRules]()
+  val robotsQueue = new Queue[RobotsRules]()
   val q = new Queue[Doc](10)
   def extract(url: URL): Future[Doc] = {
-    val fnExtractRules: URL => RobotsRules = {
-      url =>
-        val client = HttpClient.newHttpClient();
-        val request = HttpRequest.newBuilder()
-          .uri(url.toURI)
-          .build();
-        val response = client.send(request, HttpResponse.BodyHandlers.ofString())
-        val raw = new SimpleRobotRulesParser().parseContent(
-          url.toString,
-          response.body().getBytes,
-          response.headers().firstValue("Content-Type").orElse("text/plain"),
-          Lists.newArrayList("bot")
-        )
-        println(raw)
-        RobotsRules(Some(raw.getCrawlDelay))
-    }
-    val rulesFuture = new Queue[RobotsRules].extract(
-      new URL(s"${url.getProtocol}://${url.getHost}/robots.txt"),
-      fnExtractRules
+    val rules = hostRobotsRules.getOrElseUpdate(
+      url.getHost,
+      Await.result(robotsQueue.extract(getRobotsTxtURL(url), conf.robotsTxtPolicy(url)), Duration.Inf)
     )
-    val rules = Await.result(rulesFuture, Duration.Inf)
-    println(rules)
     val fnExtract: URL => Doc = conf
       .fetcher(url)
       .andThen{
