@@ -16,11 +16,7 @@ import PartialFunction.fromFunction
 import scala.concurrent.duration.Duration
 
 object SuperNewPerHostExtractor {
-  class Queue[Out](
-//                    fnExtract: URL => Doc,
-//                    delay: Long,
-                    capacity: Int = Int.MaxValue
-                  ) {
+  class Queue[Out](capacity: Int = Int.MaxValue) {
 
     private val localEC = ExecutionContext.fromExecutorService(new ThreadPoolExecutor(
       1,
@@ -85,23 +81,14 @@ class SuperNewPerHostExtractor[Raw, Doc](conf: Configuration[Raw, Doc]) {
     }
   ))
 
-//  val hostMap = collection.mutable.Map[String, Queue[Doc]]()
-  val hostRobotsRules = collection.mutable.Map[String, RobotsRules]()
-  val robotsQueue = new Queue[RobotsRules]()
-  val q = new Queue[Doc](10)
-  def extract(url: URL): Future[Doc] = {
-    val rules = hostRobotsRules.getOrElseUpdate(
-      url.getHost,
-      Await.result(robotsQueue.extract(getRobotsTxtURL(url), conf.robotsTxtPolicy(url)), Duration.Inf)
+  val hostMap = collection.mutable.Map[String, (Queue[Doc], RobotsRules)]()
+
+  def extract(url: URL, fn: URL => Doc, delay: Long): Future[Doc] = {
+    val hostKit = hostMap.getOrElseUpdate(
+      url.getHost(),
+      (new Queue[Doc], Await.result(new Queue[RobotsRules]().extract(getRobotsTxtURL(url), conf.robotsTxtPolicy(url)), Duration.Inf))
     )
-    val fnExtract: URL => Doc = conf
-      .fetcher(url)
-      .andThen{
-        raw =>
-          conf.redirect(raw).foreach(target => if (conf.redirectPattern(url) /*&& conf.redirectDepth(url) < item.depth()*/) conf.redirectHandler(target))
-          raw
-      }.andThen(conf.parser(url))
-    val future = q.extract(url, fnExtract, rules.delay.getOrElse(conf.delay(url)))
+    val future = hostKit._1.extract(url, fn, hostKit._2.delay.getOrElse(delay))
     future
   }
 

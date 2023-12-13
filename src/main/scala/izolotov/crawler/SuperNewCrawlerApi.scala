@@ -187,20 +187,19 @@ object SuperNewCrawlerApi {
     def foreach[Out, Err](onSuccess: Doc => Out, onErr: Throwable => Err = (exc: Throwable) => throw exc): Unit = {
       implicit val ec = ExecutionContext.global
       val conf: Configuration[Raw, Doc] = builder.build()
-//      val extractor = new SuperNewPerHostExtractor.Queue[Doc](10)
       val extractor = new SuperNewPerHostExtractor[Raw, Doc](conf)
       val futures = urls.map{
         item =>
           item.markAsInProgress()
           val url: URL = new URL(item.url())
-//          val fnExtract: URL => Doc = conf
-//            .fetcher(url)
-//            .andThen{
-//              raw =>
-//                conf.redirect(raw).foreach(target => if (conf.redirectPattern(url) /*&& conf.redirectDepth(url) < item.depth()*/) conf.redirectHandler(target))
-//                raw
-//            }.andThen(conf.parser(url))
-          val future = extractor.extract(url)
+          val fnExtract: URL => Doc = conf
+            .fetcher(url)
+            .andThen{
+              raw =>
+                conf.redirect(raw).foreach(target => if (conf.redirectPattern(url) && conf.redirectDepth(url) < item.depth()) conf.redirectHandler(target))
+                raw
+            }.andThen(conf.parser(url))
+          val future = extractor.extract(url, fnExtract, conf.delay(url))
           future.onComplete{
             res =>
               res.map(onSuccess).recover({case e if true => onErr(e)})
@@ -209,7 +208,7 @@ object SuperNewCrawlerApi {
           future
       }
       Await.result(Future.sequence(futures), Duration.Inf)
-//      extractor.shutdown()
+      extractor.shutdown()
     }
     def when(predicate: URL => Boolean): BranchConfigurationBuilder[Raw, Doc] = {
       new BranchConfigurationBuilder[Raw, Doc](urls, builder, predicate)
@@ -258,11 +257,25 @@ object SuperNewCrawlerApi {
 
   def main(args: Array[String]): Unit = {
     NewCrawler
-//      .read(new CrawlingQueue(Seq("http://example.com", "http://example.com", "http://example.com", "http://example.net")))
-      .read(new CrawlingQueue(Seq("https://www.densurka.ru", "https://www.densurka.ru", "https://www.densurka.ru")))
+      .read(new CrawlingQueue(Seq(
+//        "http://example.com",
+//        "http://example.com",
+//        "http://example.com",
+//        "http://example.net",
+//        "http://example.net",
+//        "http://example.net",
+//        "http://example.org",
+//        "http://example.org",
+//        "http://example.org",
+        "https://www.densurka.ru",
+        "https://www.densurka.ru"
+      )))
+//      .read(new CrawlingQueue(Seq("https://www.densurka.ru", "https://www.densurka.ru", "https://www.densurka.ru")))
       .extract(fetcher = httpFetcher, parser = defaultParser)
-      .when(url("http://example.com")).set(delay = 2000L, redirectDepth = 5, parser = anotherParser)
-      .when(url("https://www.densurka.ru")).set(robotsTxtPolicy = respect())
+      .when(url("http://example.com")).set(delay = 3000L, redirectDepth = 0, parser = anotherParser, robotsTxtPolicy = respect())
+      .when(url("http://example.net")).set(delay = 3000L, redirectDepth = 0, parser = anotherParser, robotsTxtPolicy = respect())
+      .when(url("http://example.org")).set(delay = 3000L, redirectDepth = 0, parser = anotherParser, robotsTxtPolicy = respect())
+      .when(url("https://www.densurka.ru")).set(delay = 3000L, robotsTxtPolicy = respect())
       .foreach(println)
   }
 
