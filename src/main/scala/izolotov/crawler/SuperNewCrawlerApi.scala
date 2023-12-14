@@ -54,67 +54,67 @@ object SuperNewCrawlerApi {
                               )
 
   case class Configuration[Raw, Doc] (
+                                       userAgent: String,
                                        parallelism: Int,
                                        redirect: Raw => Option[URL],
                                        redirectHandler: URL => Unit,
-//                                       robotsRulesExtractor: URL => RobotsRules,
-                                       fetcher: URL => URL => Raw,
+                                       queueLength: Int,
+                                       fetcher: URL => Raw,
                                        parser: URL => Raw => Doc,
                                        delay: URL => Long,
-                                       redirectPattern: URL => Boolean,
-                                       redirectDepth: URL => Int,
-                                       robotsTxtPolicy: URL => URL => RobotsRules
+                                       redirectPolicy: URL => Int,
+                                       robotsTxtPolicy: URL => RobotsRules
                                      )
 
   case class ConfigurationBuilder[Raw, Doc] (
+                                              userAgent: String,
                                               parallelism: Int,
                                               redirect: Raw => Option[URL],
                                               redirectHandler: URL => Unit,
-//                                              robotsRulesExtractor: URL => RobotsRules,
+                                              queueLength: Int,
                                               fetcher: URL => Raw,
                                               parser: Raw => Doc,
                                               delay: Long,
-                                              redirectPattern: Boolean,
-                                              redirectDepth: Int,
+                                              redirectPolicy: URL => Int,
                                               robotsTxtPolicy: URL => RobotsRules
                                             ) {
-    var getFetcher: PartialFunction[URL, URL => Raw] = {case _ if true => this.fetcher}
+    var getFetcher: PartialFunction[URL, Raw] = {case url if true => this.fetcher(url)}
     var getParser: PartialFunction[URL, Raw => Doc] = {case _ if true => this.parser}
     var getDelay: PartialFunction[URL, Long] = {case _ if true => this.delay}
-    var getRedirectPattern: PartialFunction[URL, Boolean] = {case _ if true => this.redirectPattern}
-    var getRedirectDepth: PartialFunction[URL, Int] = {case _ if true => this.redirectDepth}
-    var getRobotsTxtPolicy: PartialFunction[URL, URL => RobotsRules] = {case _ if true => this.robotsTxtPolicy}
+    var getRedirectPolicy: PartialFunction[URL, Int] = {case url if true => this.redirectPolicy(url)}
+    var getRobotsTxtPolicy: PartialFunction[URL, RobotsRules] = {case url if true => this.robotsTxtPolicy(url)}
     def addConf (
                   predicate: URL => Boolean,
                   fetcher: URL => Raw,
                   parser: Raw => Doc,
                   delay: Long,
-                  redirectPattern: Boolean,
-                  redirectDepth: Int,
+                  redirectPolicy: URL => Int,
                   robotsTxtPolicy: URL => RobotsRules
                 ): Unit = {
-      if (fetcher != this.fetcher) getFetcher = toPF(predicate, fetcher).orElse(getFetcher)
+      // FIXME
+      val fnRedirectPolicy: PartialFunction[URL, Int] = {case url if predicate(url) => redirectPolicy(url)}
+      val fnRobotsTxtPolicy: PartialFunction[URL, RobotsRules] = {case url if predicate(url) => robotsTxtPolicy(url)}
+      val fnFetcher: PartialFunction[URL, Raw] = {case url if predicate(url) => fetcher(url)}
+      if (fetcher != this.fetcher) getFetcher = fnFetcher.orElse(getFetcher)
       if (parser != this.parser) getParser = toPF(predicate, parser).orElse(getParser)
       if (delay != this.delay) getDelay = toPF(predicate, delay).orElse(getDelay)
-      if (redirectPattern != this.redirectPattern) getRedirectPattern =
-        toPF(predicate, redirectPattern).orElse(getRedirectPattern)
-      if (redirectDepth != this.redirectDepth) getRedirectDepth =
-        toPF(predicate, redirectDepth).orElse(getRedirectDepth)
+      if (redirectPolicy != this.redirectPolicy) getRedirectPolicy =
+        fnRedirectPolicy.orElse(getRedirectPolicy)
       if (robotsTxtPolicy != this.robotsTxtPolicy) getRobotsTxtPolicy =
-        toPF(predicate, robotsTxtPolicy).orElse(getRobotsTxtPolicy)
+        fnRobotsTxtPolicy.orElse(getRobotsTxtPolicy)
     }
 
     def build(): Configuration[Raw, Doc] = {
       Configuration[Raw, Doc] (
+        userAgent,
         parallelism,
         redirect,
         redirectHandler,
-//        robotsRulesExtractor,
+        queueLength,
         getFetcher,
         getParser,
         getDelay,
-        getRedirectPattern,
-        getRedirectDepth,
+        getRedirectPolicy,
         getRobotsTxtPolicy
       )
     }
@@ -164,12 +164,35 @@ object SuperNewCrawlerApi {
     }
   }
 
+  object ExtractionBuilder {
+    val DefaultRedirectPolicy: URL => Int = _ => 0
+  }
+
   class ExtractionBuilder(urls: CrawlingQueue) {
-    def extract[Raw, Doc](fetcher: URL => Raw, parser: Raw => Doc)(implicit redirect: Raw => Option[URL]): BranchPredicateBuilder[Raw, Doc] = {
+    def extractWith[Raw, Doc](
+                               userAgent: String,
+                               fetcher: URL => Raw,
+                               parser: Raw => Doc,
+                               parallelism: Int = 10,
+                               queueLength: Int = Int.MaxValue,
+                               delay: Long = 0L,
+                               redirectPolicy: URL => Int = _=> 0,
+                               redirectDepth: Int = 1,
+                               robotsTxtPolicy: URL => RobotsRules = RobotsRulesExtractor.extract
+                             )(implicit redirect: Raw => Option[URL]): BranchPredicateBuilder[Raw, Doc] = {
       // TODO hardcode
       val redirectHandler: URL => Unit = url => urls.add(url.toString, 1)
       val confBuilder = ConfigurationBuilder(
-        10, redirect, redirectHandler, fetcher, parser, 0L, true, 1, RobotsRulesExtractor.extract
+        userAgent,
+        parallelism,
+        redirect,
+        redirectHandler,
+        queueLength,
+        fetcher,
+        parser,
+        0L,
+        ExtractionBuilder.DefaultRedirectPolicy,
+        RobotsRulesExtractor.extract
       )
       new BranchPredicateBuilder[Raw, Doc](
         urls, confBuilder
@@ -193,10 +216,10 @@ object SuperNewCrawlerApi {
           item.markAsInProgress()
           val url: URL = new URL(item.url())
           val fnExtract: URL => Doc = conf
-            .fetcher(url)
+            .fetcher
             .andThen{
               raw =>
-                conf.redirect(raw).foreach(target => if (conf.redirectPattern(url) && conf.redirectDepth(url) < item.depth()) conf.redirectHandler(target))
+                conf.redirect(raw).foreach(target => if (conf.redirectPolicy(url) > item.depth()) conf.redirectHandler(target))
                 raw
             }.andThen(conf.parser(url))
           val future = extractor.extract(url, fnExtract, conf.delay(url))
@@ -220,15 +243,10 @@ object SuperNewCrawlerApi {
              fetcher: URL => Raw = conf.fetcher,
              parser: Raw => Doc = conf.parser,
              delay: Long = conf.delay,
-             redirectPattern: Boolean = conf.redirectPattern,
-             redirectDepth: Int = conf.redirectDepth,
+             redirectPolicy: URL => Int = conf.redirectPolicy,
              robotsTxtPolicy: URL => RobotsRules = conf.robotsTxtPolicy
            ): BranchPredicateBuilder[Raw, Doc] = {
-      conf.addConf(predicate, fetcher, parser, delay, redirectPattern, redirectDepth, robotsTxtPolicy)
-//      conf.addConf(predicate, UrlConf[Raw, Doc](
-//        fetcher, parser, delay, redirectPattern, redirectDepth
-//      ))
-
+      conf.addConf(predicate, fetcher, parser, delay, redirectPolicy, robotsTxtPolicy)
       new BranchPredicateBuilder[Raw, Doc](urls, conf)
     }
   }
@@ -255,11 +273,14 @@ object SuperNewCrawlerApi {
   def respect(): URL => RobotsRules = url => RobotsRulesExtractor.extract(url)
   def ignore(): URL => RobotsRules = _ => RobotsRules(None)
 
+  def all(depth: Int = 5): URL => Int = url => depth
+
   def main(args: Array[String]): Unit = {
+    val userAgent = "Mozilla/5.0 (platform; rv:geckoversion) Gecko/geckotrail Firefox/firefoxversion"
     NewCrawler
       .read(new CrawlingQueue(Seq(
-//        "http://example.com",
-//        "http://example.com",
+        "http://example.com",
+        "http://example.com",
 //        "http://example.com",
 //        "http://example.net",
 //        "http://example.net",
@@ -267,14 +288,15 @@ object SuperNewCrawlerApi {
 //        "http://example.org",
 //        "http://example.org",
 //        "http://example.org",
-        "https://www.densurka.ru",
-        "https://www.densurka.ru"
+//        "http://example.org",
+//        "http://example.org",
+//        "https://www.densurka.ru",
+//        "https://www.densurka.ru"
       )))
 //      .read(new CrawlingQueue(Seq("https://www.densurka.ru", "https://www.densurka.ru", "https://www.densurka.ru")))
-      .extract(fetcher = httpFetcher, parser = defaultParser)
-      .when(url("http://example.com")).set(delay = 3000L, redirectDepth = 0, parser = anotherParser, robotsTxtPolicy = respect())
-      .when(url("http://example.net")).set(delay = 3000L, redirectDepth = 0, parser = anotherParser, robotsTxtPolicy = respect())
-      .when(url("http://example.org")).set(delay = 3000L, redirectDepth = 0, parser = anotherParser, robotsTxtPolicy = respect())
+      .extractWith(userAgent = userAgent, fetcher = httpFetcher, parser = defaultParser)
+      .when(url("http://example.com")).set(redirectPolicy = all())
+//      .when(url("http://example.com")).set(delay = 3000L, redirectDepth = 0, parser = anotherParser, robotsTxtPolicy = respect())
       .when(url("https://www.densurka.ru")).set(delay = 3000L, robotsTxtPolicy = respect())
       .foreach(println)
   }

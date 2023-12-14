@@ -16,6 +16,7 @@ import PartialFunction.fromFunction
 import scala.concurrent.duration.Duration
 
 object SuperNewPerHostExtractor {
+  // TODO add initial delay parameter
   class Queue[Out](capacity: Int = Int.MaxValue) {
 
     private val localEC = ExecutionContext.fromExecutorService(new ThreadPoolExecutor(
@@ -66,14 +67,14 @@ object SuperNewPerHostExtractor {
 class SuperNewPerHostExtractor[Raw, Doc](conf: Configuration[Raw, Doc]) {
 
   // TODO remove me
-  val processingQueueCapacity = 10
+//  val processingQueueCapacity = 10
 
   implicit val ec = ExecutionContext.fromExecutorService(new ThreadPoolExecutor(
     conf.parallelism,
     conf.parallelism,
     0L,
     TimeUnit.MILLISECONDS,
-    new LinkedBlockingDeque[Runnable](processingQueueCapacity),
+    new LinkedBlockingDeque[Runnable](conf.queueLength),
     DaemonThreadFactory,
     (r: Runnable, e: ThreadPoolExecutor) => {
       // TODO block instead of throw an exception
@@ -86,7 +87,7 @@ class SuperNewPerHostExtractor[Raw, Doc](conf: Configuration[Raw, Doc]) {
   def extract(url: URL, fn: URL => Doc, delay: Long): Future[Doc] = {
     val hostKit = hostMap.getOrElseUpdate(
       url.getHost(),
-      (new Queue[Doc], Await.result(new Queue[RobotsRules]().extract(getRobotsTxtURL(url), conf.robotsTxtPolicy(url)), Duration.Inf))
+      (new Queue[Doc], Await.result(new Queue[RobotsRules]().extract(getRobotsTxtURL(url), conf.robotsTxtPolicy), Duration.Inf))
     )
     val future = hostKit._1.extract(url, fn, hostKit._2.delay.getOrElse(delay))
     future
